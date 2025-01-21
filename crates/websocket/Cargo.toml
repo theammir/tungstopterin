@@ -1,0 +1,11 @@
+[package]
+name = "websocket"
+version.workspace = true
+authors.workspace = true
+edition = "2021"
+
+[dependencies]
+tokio = { version = "~1.43", features = ["net"] }
+
+[dev-dependencies]
+tokio = { version = "~1.43", features = ["rt", "net", "macros"] }
