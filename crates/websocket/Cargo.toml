@@ -2,7 +2,7 @@
 name = "websocket"
 version.workspace = true
 authors.workspace = true
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 tokio = { version = "~1.43", features = ["net"] }

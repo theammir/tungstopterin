@@ -3,6 +3,6 @@ name = "client"
 version.workspace = true
 authors.workspace = true
 description.workspace = true
-edition = "2021"
+edition = "2024"
 
 [dependencies]
