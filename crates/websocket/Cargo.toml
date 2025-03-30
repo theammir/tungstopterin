@@ -5,6 +5,7 @@ authors.workspace = true
 edition = "2024"
 
 [dependencies]
+rand = { version = "0.9.0", features = ["thread_rng"] }
 tokio = { version = "~1.43", features = ["net"] }
 
 [dev-dependencies]

@@ -1,4 +1,6 @@
-#[derive(Debug, Clone, Copy)]
+use rand::RngCore;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Opcode {
     Continue = 0,
     Text = 1,
@@ -29,10 +31,9 @@ impl TryFrom<u8> for Opcode {
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub fin: bool,
-    /// Only last 3 least significant bits count.
+    /// Only 3 least significant bits count.
     /// Should really remain all 0s for the purposes of this lib.
     pub rsv: u8,
-    /// Can be invalid for now.
     pub opcode: Opcode,
     pub payload_len: u64,
     pub masking_key: Option<u32>,
@@ -40,6 +41,24 @@ pub struct Frame {
 }
 
 impl Frame {
+    /// Creates a new `Frame` with an initialized masking key.
+    /// No actual masking is done, and is the responsibility of the caller,
+    /// see [Frame::mask].
+    pub fn new(fin: bool, opcode: Opcode, payload: Vec<u8>) -> Self {
+        Frame {
+            fin,
+            rsv: 0,
+            opcode,
+            payload_len: payload.len() as u64,
+            masking_key: Some(rand::rng().next_u32()),
+            payload,
+        }
+    }
+    /// Masks the payload.
+    /// The operation is *involutory*, meaning that unmasking is done
+    /// through this method as well.
+    /// # Panics
+    /// Panics if `masking_key` is *None*.
     pub fn mask(&mut self) {
         let key = self.masking_key.unwrap();
 
@@ -88,7 +107,7 @@ impl From<Frame> for Vec<u8> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameError {
     TooShort,
     InvalidOpcode,
@@ -150,7 +169,11 @@ impl TryFrom<Vec<u8>> for Frame {
                 .map_err(|_| FrameError::InvalidOpcode)?,
             payload_len,
             masking_key,
-            payload: value[last_key_byte..].to_vec(),
+            payload: {
+                let mut payload = value[last_key_byte..].to_vec();
+                payload.truncate(payload_len as usize);
+                payload
+            },
         })
     }
 }
@@ -176,6 +199,11 @@ mod tests {
             print!("{:08b} ", byte);
         }
         println!("\n");
+
+        assert_eq!(bytes[0] >> 7, 0, "incorrect FIN bit");
+        assert_eq!((bytes[0] & 0b01110000) >> 4, 0, "incorrect RSV bits");
+        assert_eq!(bytes[1] >> 7, 0, "incorrect masked bit");
+        assert_eq!(bytes[1] & 0b01111111, 127, "incorrect payload length");
     }
 
     #[test]
@@ -196,6 +224,8 @@ mod tests {
         }
         println!();
 
+        assert_eq!(masked_7bit.payload[2], 0xff);
+
         masked_7bit.mask();
         let bytes: Vec<u8> = masked_7bit.clone().into();
         println!("Masked:");
@@ -203,6 +233,13 @@ mod tests {
             print!("{:08b} ", byte);
         }
         println!();
+
+        assert_eq!(masked_7bit.payload[2], 0xcf, "invalid masked payload");
+
+        assert_eq!(bytes[0] >> 7, 1, "incorrect FIN bit");
+        assert_eq!((bytes[0] & 0b01110000) >> 4, 3, "incorrect RSV bits");
+        assert_eq!(bytes[1] >> 7, 1, "incorrect masked bit");
+        assert_eq!(bytes[1] & 0b01111111, 3, "incorrect payload length");
     }
 
     #[test]
@@ -216,6 +253,11 @@ mod tests {
 
         let frame: Frame = unmasked_long_bytes.try_into().unwrap();
         println!("Reconstructed: {:?}\n", frame);
+
+        assert!(!frame.fin, "incorrect FIN bit");
+        assert_eq!(frame.rsv, 0, "incorrect RSV bits");
+        assert!(frame.masking_key.is_none(), "incorrect masked bit");
+        assert_eq!(frame.payload_len, 69420, "incorrect payload length");
     }
 
     #[test]
@@ -228,7 +270,16 @@ mod tests {
         println!();
 
         let mut frame: Frame = masked_7bit_bytes.try_into().unwrap();
+
+        assert_eq!(frame.payload[2], 0xcf, "invalid masked payload");
         frame.mask();
+        assert_eq!(frame.payload[2], 0xff, "invalid unmasked payload");
+
         println!("Unmasked 7-bit: {:?}", frame);
+
+        assert!(frame.fin, "incorrect FIN bit");
+        assert_eq!(frame.rsv, 3, "incorrect RSV bits");
+        assert!(frame.masking_key.is_some(), "incorrect masked bit");
+        assert_eq!(frame.payload_len, 3, "incorrect payload length");
     }
 }
