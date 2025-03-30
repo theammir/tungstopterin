@@ -35,7 +35,9 @@ impl From<u16> for StatusCode {
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    /// Represents a frame with valid *UTF-8* text.
     Text(String),
+    /// Represents a frame with any binary data.
     Binary(Vec<u8>),
     /// Represents a *Close* frame with an optional `String`
     /// up to 123 bytes long.

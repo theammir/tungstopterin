@@ -6,3 +6,5 @@ description.workspace = true
 edition = "2024"
 
 [dependencies]
+websocket = { path = "../websocket" }
+tokio = { version = "*", features = ["full"] }
