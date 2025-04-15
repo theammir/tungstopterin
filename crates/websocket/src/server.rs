@@ -2,6 +2,8 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha1::Digest;
 use sha1::Sha1;
 use std::io::ErrorKind;
+use tokio::io::AsyncReadExt;
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
 
@@ -38,7 +40,7 @@ fn validate_upgrade_headers(request: &str) -> bool {
             .any(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
 }
 
-pub struct WSServer {
+pub struct WsServer {
     listener: TcpListener,
 }
 
@@ -46,30 +48,35 @@ pub struct WSServer {
 // As a server, we should probably accept listener connections in terms of plain TCP,
 // and provide a wrapper with implemented WS stuff.
 // `WSClient` already consumes the stream so I guess that's fine?
-impl WSServer {
-    pub fn new(listener: TcpListener) -> WSServer {
-        WSServer { listener }
+impl WsServer {
+    pub fn new(listener: TcpListener) -> WsServer {
+        WsServer { listener }
     }
 
-    async fn read_from_socket(socket: &TcpStream) -> std::io::Result<Vec<u8>> {
+    async fn read_from_socket<R>(socket: &mut R) -> std::io::Result<Vec<u8>>
+    where
+        R: AsyncReadExt + Unpin,
+    {
         loop {
-            socket.readable().await?;
             let mut buf = [0_u8; 4096];
-            match socket.try_read(&mut buf) {
+            match socket.read(&mut buf).await {
                 Ok(n) => break Ok(buf[..n].to_vec()),
                 Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
                 Err(e) => break Err(e),
             }
         }
     }
-    async fn write_to_socket(socket: &TcpStream, data: &[u8]) -> std::io::Result<()> {
-        socket.writable().await?;
-        socket.try_write(data)?;
-        Ok(())
+    async fn write_to_socket<W>(socket: &mut W, data: &[u8]) -> std::io::Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
+        // turns out i had convenience methods all along
+        // still probably needs proper handling
+        socket.write_all(data).await
     }
 
-    pub async fn try_upgrade(socket: &TcpStream) -> std::io::Result<()> {
-        let request = String::from_utf8(WSServer::read_from_socket(socket).await?.to_vec())
+    pub async fn try_upgrade(socket: &mut TcpStream) -> std::io::Result<()> {
+        let request = String::from_utf8(WsServer::read_from_socket(socket).await?.to_vec())
             .map_err(|_| ErrorKind::InvalidData)?;
 
         validate_upgrade_headers(&request);
@@ -91,20 +98,26 @@ Sec-Websocket-Accept: {key}\r\n",
             key = generate_response_key(sec_key.to_string())
         );
 
-        WSServer::write_to_socket(socket, response.as_bytes()).await?;
+        WsServer::write_to_socket(socket, response.as_bytes()).await?;
         Ok(())
     }
 
-    pub async fn send(socket: &TcpStream, message: Message) -> std::io::Result<()> {
+    pub async fn send<W>(socket: &mut W, message: Message) -> std::io::Result<()>
+    where
+        W: AsyncWriteExt + Unpin,
+    {
         let binary: Vec<u8> = {
             let frame: Frame = message.into();
             frame.into()
         };
-        WSServer::write_to_socket(socket, &binary).await
+        WsServer::write_to_socket(socket, &binary).await
     }
 
-    pub async fn receive(socket: &TcpStream) -> Result<Message, StatusCode> {
-        let data = WSServer::read_from_socket(socket)
+    pub async fn receive<R>(socket: &mut R) -> Result<Message, StatusCode>
+    where
+        R: AsyncReadExt + Unpin,
+    {
+        let data = WsServer::read_from_socket(socket)
             .await
             .map_err(|_| StatusCode::InternalServerError)?;
 
@@ -117,23 +130,16 @@ Sec-Websocket-Accept: {key}\r\n",
         }
     }
 
-    pub async fn listen(&mut self) -> std::io::Result<()> {
+    pub async fn listen<F, T: Fn(TcpStream) -> F>(&mut self, on_connect: T) -> std::io::Result<()>
+    where
+        F: Future + Send + 'static,
+        F::Output: Send + 'static,
+    {
         loop {
-            let (socket, _) = self.listener.accept().await?;
-            WSServer::try_upgrade(&socket).await?;
+            let (mut socket, _) = self.listener.accept().await?;
+            WsServer::try_upgrade(&mut socket).await?;
 
-            tokio::spawn(async move {
-                loop {
-                    let message = WSServer::receive(&socket).await;
-                    if let Ok(msg) = message {
-                        println!("Got message: {:?}", msg);
-                        _ = WSServer::send(&socket, msg).await;
-                        println!("Send message back.");
-                    } else {
-                        break;
-                    }
-                }
-            });
+            tokio::spawn(on_connect(socket));
         }
     }
 }

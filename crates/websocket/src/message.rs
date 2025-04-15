@@ -33,7 +33,7 @@ impl From<u16> for StatusCode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     /// Represents a frame with valid *UTF-8* text.
     Text(String),
@@ -77,7 +77,11 @@ impl TryFrom<Frame> for Message {
                 (u16::from_be_bytes(value.payload[0..2].try_into().unwrap())).into(),
                 {
                     if let Ok(string) = String::from_utf8(value.payload[2..].to_vec()) {
-                        Some(string)
+                        if !string.is_empty() {
+                            Some(string)
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
@@ -125,7 +129,6 @@ impl From<Message> for Frame {
             Message::Close(code, reason) => {
                 let mut vector =
                     Vec::with_capacity(reason.as_ref().map_or(0, |s| usize::max(123, s.len()) + 2));
-                // TODO: Rewrite all `extend_from_slice` to `extend`
                 vector.extend((code as u16).to_be_bytes().iter());
                 if let Some(s) = reason {
                     let mut s = s.into_bytes();

@@ -1,7 +1,10 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rand::Rng;
 use std::io::ErrorKind;
-use tokio::net::TcpStream;
+use tokio::net::{
+    TcpStream,
+    tcp::{OwnedReadHalf, OwnedWriteHalf},
+};
 
 use crate::{
     frame::Frame,
@@ -14,33 +17,35 @@ fn generate_sec_key() -> String {
     STANDARD.encode(nonce)
 }
 
-pub struct WSClient {
-    stream: TcpStream,
+#[derive(Debug)]
+pub struct WsClient {
+    read_half: WsRecvHalf,
+    write_half: WsSendHalf,
 }
 
-impl WSClient {
-    pub fn new(stream: TcpStream) -> WSClient {
-        WSClient { stream }
-    }
+#[derive(Debug)]
+pub struct WsRecvHalf(OwnedReadHalf);
+#[derive(Debug)]
+pub struct WsSendHalf(OwnedWriteHalf);
 
-    async fn read_from_socket(&mut self) -> std::io::Result<Vec<u8>> {
-        loop {
-            self.stream.readable().await?;
-            let mut buf = [0_u8; 4096];
-            match self.stream.try_read(&mut buf) {
-                Ok(n) => break Ok(buf[..n].to_vec()),
-                Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
-                Err(e) => break Err(e),
-            }
-        }
-    }
-    async fn write_to_socket(&mut self, data: &[u8]) -> std::io::Result<()> {
-        self.stream.writable().await?;
-        self.stream.try_write(data)?;
-        Ok(())
-    }
+#[allow(async_fn_in_trait)]
+pub trait WsSend {
+    async fn write_to_socket(&mut self, data: &[u8]) -> std::io::Result<()>;
+    async fn send(&mut self, message: Message) -> std::io::Result<()>;
+}
 
-    pub async fn try_upgrade(&mut self) -> std::io::Result<()> {
+#[allow(async_fn_in_trait)]
+pub trait WsRecv {
+    async fn read_from_socket(&mut self) -> std::io::Result<Vec<u8>>;
+    async fn receive(&mut self) -> Result<Message, StatusCode>;
+}
+
+#[allow(async_fn_in_trait)]
+pub trait Websocket: WsSend + WsRecv {
+    async fn try_upgrade(&mut self) -> std::io::Result<()>;
+}
+impl<T: WsSend + WsRecv> Websocket for T {
+    async fn try_upgrade(&mut self) -> std::io::Result<()> {
         let sec_key = generate_sec_key();
         self.write_to_socket(
             format!(
@@ -74,17 +79,35 @@ Sec-Websocket-Version: 13\r\n",
 
         Ok(())
     }
+}
 
-    pub async fn send(&mut self, message: Message) -> std::io::Result<()> {
-        let binary: Vec<u8> = {
-            let mut frame: Frame = message.into();
-            frame.mask();
-            frame.into()
-        };
-        self.write_to_socket(&binary).await
+impl WsClient {
+    pub fn from_stream(stream: TcpStream) -> WsClient {
+        let (rx, tx) = stream.into_split();
+        WsClient {
+            read_half: WsRecvHalf(rx),
+            write_half: WsSendHalf(tx),
+        }
     }
 
-    pub async fn receive(&mut self) -> Result<Message, StatusCode> {
+    pub fn into_split(self) -> (WsRecvHalf, WsSendHalf) {
+        (self.read_half, self.write_half)
+    }
+}
+
+impl WsRecv for WsRecvHalf {
+    async fn read_from_socket(&mut self) -> std::io::Result<Vec<u8>> {
+        loop {
+            self.0.readable().await?;
+            let mut buf = [0_u8; 4096];
+            match self.0.try_read(&mut buf) {
+                Ok(n) => break Ok(buf[..n].to_vec()),
+                Err(ref e) if e.kind() == ErrorKind::WouldBlock => continue,
+                Err(e) => break Err(e),
+            }
+        }
+    }
+    async fn receive(&mut self) -> Result<Message, StatusCode> {
         let data = self
             .read_from_socket()
             .await
@@ -94,5 +117,42 @@ Sec-Websocket-Version: 13\r\n",
             let frame: Frame = data.try_into().map_err(|_| StatusCode::ProtocolError)?;
             frame.try_into()
         }
+    }
+}
+
+impl WsSend for WsSendHalf {
+    async fn write_to_socket(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.0.writable().await?;
+        self.0.try_write(data)?;
+        Ok(())
+    }
+
+    async fn send(&mut self, message: Message) -> std::io::Result<()> {
+        let binary: Vec<u8> = {
+            let mut frame: Frame = message.into();
+            frame.mask();
+            frame.into()
+        };
+        self.write_to_socket(&binary).await
+    }
+}
+
+impl WsRecv for WsClient {
+    async fn read_from_socket(&mut self) -> std::io::Result<Vec<u8>> {
+        self.read_half.read_from_socket().await
+    }
+
+    async fn receive(&mut self) -> Result<Message, StatusCode> {
+        self.read_half.receive().await
+    }
+}
+
+impl WsSend for WsClient {
+    async fn write_to_socket(&mut self, data: &[u8]) -> std::io::Result<()> {
+        self.write_half.write_to_socket(data).await
+    }
+
+    async fn send(&mut self, message: Message) -> std::io::Result<()> {
+        self.write_half.send(message).await
     }
 }
