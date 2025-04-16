@@ -1,16 +1,12 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{
-        TcpListener, TcpStream,
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-    },
-    sync::RwLock,
+use tokio::{net::TcpListener, sync::RwLock};
+use websocket::{
+    Client, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket,
+    message::Message,
 };
-use websocket::{message::Message, server::WsServer};
 
-async fn on_connect(socket: TcpStream, clients_tx: Clients) {
+async fn on_connect(socket: WsStream<Client>, clients_tx: Clients) {
     let (mut rx, tx) = socket.into_split();
     {
         let mut lock = clients_tx.write().await;
@@ -21,14 +17,15 @@ async fn on_connect(socket: TcpStream, clients_tx: Clients) {
     );
 }
 
-async fn send_messages(socket: &mut OwnedWriteHalf, clients_tx: Clients) -> std::io::Result<()> {
+async fn _send_messages(
+    socket: &mut WsSendHalf<Client>,
+    clients_tx: Clients,
+) -> std::io::Result<()> {
     let mut counter = 1;
     loop {
-        if (WsServer::send(
-            socket,
-            Message::Text(format!("Server: This is message #{counter}")),
-        )
-        .await)
+        if (socket
+            .send(Message::Text(format!("Server: This is message #{counter}")))
+            .await)
             .is_err()
         {
             println!("The client has disconnected");
@@ -44,23 +41,26 @@ async fn send_messages(socket: &mut OwnedWriteHalf, clients_tx: Clients) -> std:
     }
 }
 
-async fn receive_messages(socket: &mut OwnedReadHalf, clients_tx: Clients) -> std::io::Result<()> {
-    let addr = socket.peer_addr()?;
+async fn receive_messages(
+    socket: &mut WsRecvHalf<Client>,
+    clients_tx: Clients,
+) -> std::io::Result<()> {
+    let addr = socket.0.peer_addr()?;
     loop {
-        match WsServer::receive(socket).await {
+        match socket.receive().await {
             Ok(Message::Text(text)) => {
                 println!("Received message: `{text}`");
                 let mut lock = clients_tx.write().await;
                 for c in lock.iter_mut() {
                     let msg_text = {
-                        let client_addr = c.peer_addr()?;
+                        let client_addr = c.0.peer_addr()?;
                         if addr == client_addr {
                             format!("You: {text}")
                         } else {
                             format!("{client_addr}: {text}")
                         }
                     };
-                    _ = WsServer::send(c, Message::Text(msg_text)).await;
+                    _ = c.send(Message::Text(msg_text)).await;
                 }
             }
             Err(_) => {
@@ -72,17 +72,19 @@ async fn receive_messages(socket: &mut OwnedReadHalf, clients_tx: Clients) -> st
     }
 }
 
-type Clients = Arc<RwLock<Vec<OwnedWriteHalf>>>;
+type Clients = Arc<RwLock<Vec<WsSendHalf<Client>>>>;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:1337").await?;
-    let mut server = WsServer::new(listener);
     let clients_tx: Clients = Arc::new(RwLock::new(vec![]));
 
-    server
-        .listen(|socket: TcpStream| on_connect(socket, Arc::clone(&clients_tx)))
-        .await?;
-
-    Ok(())
+    loop {
+        if let Ok((socket, _)) = listener.accept().await {
+            let mut socket = WsStream::<Client>::from_stream(socket);
+            if socket.try_upgrade().await.is_ok() {
+                tokio::spawn(on_connect(socket, Arc::clone(&clients_tx)));
+            }
+        }
+    }
 }
