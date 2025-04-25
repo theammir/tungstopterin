@@ -74,17 +74,25 @@ impl TryFrom<Frame> for Message {
             )),
             Opcode::Binary => Ok(Message::Binary(value.payload)),
             Opcode::Close => Ok(Message::Close(
-                (u16::from_be_bytes(value.payload[0..2].try_into().unwrap())).into(),
+                (u16::from_be_bytes(
+                    value
+                        .payload
+                        .get(0..2)
+                        .ok_or(StatusCode::ProtocolError)?
+                        .try_into()
+                        .unwrap(),
+                ))
+                .into(),
                 {
-                    if let Ok(string) = String::from_utf8(value.payload[2..].to_vec()) {
-                        if !string.is_empty() {
-                            Some(string)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                    value
+                        .payload
+                        .get(2..)
+                        .map(|bytes| {
+                            String::from_utf8(bytes.to_vec())
+                                .map_err(|_| StatusCode::InvalidPayloadData)
+                        })
+                        .transpose()?
+                        .filter(|s| !s.is_empty())
                 },
             )),
             Opcode::Ping => Ok(Message::Ping(value.payload)),

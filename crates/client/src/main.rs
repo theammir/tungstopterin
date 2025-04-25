@@ -13,7 +13,9 @@ use ratatui::{
 use tokio::{net::TcpStream, sync::mpsc::UnboundedReceiver};
 use tokio_util::sync::CancellationToken;
 use tui_input::backend::crossterm::EventHandler;
-use websocket::{IntoWebsocket, Server, WsRecv, WsSend, WsSendHalf, WsStream, message::Message};
+use websocket::{
+    Server, WsRecv, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket, message::Message,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
@@ -41,24 +43,12 @@ struct App {
     received_messages: Vec<String>,
 }
 
-fn split_in_lines_of(s: &str, length: usize) -> String {
-    s.chars()
-        .collect::<Vec<_>>()
-        .as_slice()
-        .chunks(length)
-        .map(|chunk| String::from_iter(chunk.iter()) + "\n")
-        .reduce(|acc, line| acc + &line)
-        .unwrap_or(String::new())
-        .trim()
-        .to_string()
-}
-
 impl Widget for &App {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let layout = Layout::vertical([Constraint::Fill(1), Constraint::Max(5)]);
         let [chat_area, input_area] = layout.areas(area);
         let bordered = Block::bordered().border_type(ratatui::widgets::BorderType::Rounded);
-        Paragraph::new(split_in_lines_of(
+        Paragraph::new(
             self.received_messages
                 .iter()
                 .cloned()
@@ -66,20 +56,22 @@ impl Widget for &App {
                 .reduce(|acc, i| acc + &i)
                 .unwrap_or(String::new())
                 .trim(),
-            chat_area.width as usize - 2,
-        ))
+        )
         .block(bordered.clone())
-        .render(chat_area, buf);
-        Paragraph::new(split_in_lines_of(
-            self.current_input.value(),
-            input_area.width as usize - 2,
+        .scroll((
+            0,
+            self.current_input.visual_scroll(input_area.width as usize) as u16,
         ))
-        .block(if self.mode == Mode::Insert {
-            bordered.blue()
-        } else {
-            bordered
-        })
-        .render(input_area, buf);
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .render(chat_area, buf);
+        Paragraph::new(self.current_input.value())
+            .block(if self.mode == Mode::Insert {
+                bordered.blue()
+            } else {
+                bordered
+            })
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .render(input_area, buf);
     }
 }
 
@@ -165,6 +157,7 @@ impl App {
 #[tokio::main]
 async fn main() -> Result<()> {
     color_eyre::install()?;
+
     let mut ws = WsStream::from_stream(TcpStream::connect("127.0.0.1:1337").await?);
     ws.try_upgrade().await?;
     let (mut ws_rx, ws_tx) = ws.into_split();

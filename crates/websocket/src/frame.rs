@@ -107,12 +107,14 @@ impl From<Frame> for Vec<u8> {
     }
 }
 
+// TEST: these
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrameError {
-    TooShort,
+    FrameTooShort,
     InvalidOpcode,
     LengthParsing,
     MaskingKeyParsing,
+    PayloadTooShort,
 }
 
 impl TryFrom<Vec<u8>> for Frame {
@@ -120,7 +122,7 @@ impl TryFrom<Vec<u8>> for Frame {
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
         if value.len() < 2 {
-            return Err(FrameError::TooShort);
+            return Err(FrameError::FrameTooShort);
         }
 
         let mut last_len_byte: usize = 1;
@@ -132,18 +134,22 @@ impl TryFrom<Vec<u8>> for Frame {
                     const U16_LEN: usize = 2;
                     last_len_byte += U16_LEN;
                     u16::from_be_bytes(
-                        value[2..][..U16_LEN]
+                        value
+                            .get(2..2 + U16_LEN)
+                            .ok_or(FrameError::LengthParsing)?
                             .try_into()
-                            .map_err(|_| FrameError::LengthParsing)?,
+                            .unwrap(),
                     ) as u64
                 }
                 127 => {
                     const U64_LEN: usize = 8;
                     last_len_byte += U64_LEN;
                     u64::from_be_bytes(
-                        value[2..][..U64_LEN]
+                        value
+                            .get(2..2 + U64_LEN)
+                            .ok_or(FrameError::LengthParsing)?
                             .try_into()
-                            .map_err(|_| FrameError::LengthParsing)?,
+                            .unwrap(),
                     )
                 }
                 _ => unreachable!(),
@@ -152,15 +158,18 @@ impl TryFrom<Vec<u8>> for Frame {
 
         const U32_LEN: usize = 4;
         let mut last_key_byte: usize = last_len_byte + 1;
-        let masking_key = (value[1] >> 7 != 0).then(|| {
-            // TODO: FrameError::MaskingKeyParsing
+        let masking_key = (value[1] >> 7 != 0) // is masked bit
+            .then(|| {
+                value
+                    .get(last_key_byte..last_key_byte + U32_LEN)
+                    .ok_or(FrameError::MaskingKeyParsing)
+            })
+            .transpose()?
+            .map(|bytes| u32::from_be_bytes(bytes.try_into().unwrap()));
+
+        if masking_key.is_some() {
             last_key_byte += U32_LEN;
-            u32::from_be_bytes(
-                value[last_key_byte - U32_LEN..last_key_byte]
-                    .try_into()
-                    .unwrap(),
-            )
-        });
+        }
 
         Ok(Self {
             fin: (value[0] >> 7) != 0,
@@ -170,7 +179,10 @@ impl TryFrom<Vec<u8>> for Frame {
             payload_len,
             masking_key,
             payload: {
-                let mut payload = value[last_key_byte..].to_vec();
+                let mut payload = value
+                    .get(last_key_byte..)
+                    .ok_or(FrameError::PayloadTooShort)?
+                    .to_vec();
                 payload.truncate(payload_len as usize);
                 payload
             },

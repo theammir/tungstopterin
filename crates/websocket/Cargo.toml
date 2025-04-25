@@ -8,7 +8,7 @@ edition = "2024"
 base64 = "0.22.1"
 rand = { version = "0.9.0", features = ["thread_rng"] }
 sha1 = "0.10.6"
-tokio = { version = "~1.43", features = ["net"] }
+tokio = { version = "~1.43", features = ["net", "io-util"] }
 
 [dev-dependencies]
 tokio = { version = "~1.43", features = ["rt", "net", "macros"] }
