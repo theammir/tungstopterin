@@ -1,7 +1,9 @@
 use core::net::SocketAddr;
+use std::collections::HashMap;
 use std::sync::Mutex as SyncMutex;
 use std::sync::{Arc, OnceLock};
 
+use common::protocol;
 use tokio::{net::TcpListener, sync::Mutex};
 use websocket::{
     Client, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket,
@@ -25,17 +27,17 @@ fn random_names_init() -> SyncMutex<RandomNames> {
     )
 }
 
-type RandomColors = std::iter::Cycle<std::array::IntoIter<(u8, u8, u8), 6>>;
+type RandomColors = std::iter::Cycle<std::array::IntoIter<protocol::Color, 6>>;
 static RANDOM_COLORS: OnceLock<SyncMutex<RandomColors>> = OnceLock::new();
 fn random_colors_init() -> SyncMutex<RandomColors> {
     SyncMutex::new(
         [
-            (255, 0, 0),
-            (0, 255, 0),
-            (0, 0, 255),
-            (255, 255, 0),
-            (0, 255, 255),
-            (255, 0, 255),
+            protocol::Color::Truecolor(255, 0, 0),
+            protocol::Color::Truecolor(0, 255, 0),
+            protocol::Color::Truecolor(0, 0, 255),
+            protocol::Color::Truecolor(255, 255, 0),
+            protocol::Color::Truecolor(0, 255, 255),
+            protocol::Color::Truecolor(255, 0, 255),
         ]
         .into_iter()
         .cycle(),
@@ -44,38 +46,98 @@ fn random_colors_init() -> SyncMutex<RandomColors> {
 
 struct ClientData {
     tx: WsSendHalf<Client>,
-    addr: SocketAddr,
-    name: &'static str,
-    color: (u8, u8, u8),
+    name: String,
+    color: protocol::Color,
+}
+
+impl From<&ClientData> for protocol::MessageSender {
+    fn from(value: &ClientData) -> Self {
+        Self {
+            name: value.name.to_string(),
+            color: value.color,
+        }
+    }
+}
+
+impl From<&mut ClientData> for protocol::MessageSender {
+    fn from(value: &mut ClientData) -> Self {
+        Self {
+            name: value.name.to_string(),
+            color: value.color,
+        }
+    }
 }
 
 impl ClientData {
-    fn new(tx: WsSendHalf<Client>, address: SocketAddr) -> Self {
+    fn new(tx: WsSendHalf<Client>) -> Self {
         let mut names_lock = RANDOM_NAMES.get().unwrap().lock().unwrap();
         let mut colors_lock = RANDOM_COLORS.get().unwrap().lock().unwrap();
         ClientData {
             tx,
-            addr: address,
-            name: names_lock.next().unwrap(),
+            name: names_lock.next().unwrap().to_string(),
             color: colors_lock.next().unwrap(),
         }
     }
 }
 
-struct Clients(pub Vec<ClientData>);
+struct Clients {
+    pub data_map: HashMap<SocketAddr, ClientData>,
+    pub token_map: HashMap<protocol::Token, SocketAddr>,
+}
 
 impl Clients {
     pub fn new() -> Self {
-        Clients(vec![])
+        Clients {
+            data_map: HashMap::new(),
+            token_map: HashMap::new(),
+        }
     }
 
     pub fn by_addr(&self, address: SocketAddr) -> Option<&ClientData> {
-        self.0.iter().find(|&client| client.addr == address)
+        self.data_map.get(&address)
     }
 
     pub fn by_addr_mut(&mut self, address: SocketAddr) -> Option<&mut ClientData> {
-        self.0.iter_mut().find(|client| client.addr == address)
+        self.data_map.get_mut(&address)
     }
+
+    pub fn by_token(&self, token: protocol::Token) -> Option<&ClientData> {
+        self.token_map
+            .get(&token)
+            .and_then(|addr| self.by_addr(*addr))
+    }
+
+    pub fn by_token_mut(&mut self, token: protocol::Token) -> Option<&mut ClientData> {
+        self.token_map
+            .get(&token)
+            .cloned()
+            .and_then(|addr| self.by_addr_mut(addr))
+    }
+
+    // TODO: Move these into whoever owns Clients in the future.
+    pub fn generate_token(&self, address: SocketAddr) -> protocol::Token {
+        address.to_string()
+    }
+
+    pub async fn try_connect(
+        &mut self,
+        address: SocketAddr,
+        client: ClientData,
+    ) -> Option<protocol::Token> {
+        if self.data_map.insert(address, client).is_none() {
+            let token = self.generate_token(address);
+            self.token_map.insert(token.clone(), address);
+            Some(token)
+        } else {
+            None
+        }
+    }
+
+    pub async fn disconnect(&mut self, address: SocketAddr) {
+        self.data_map.remove(&address);
+        self.token_map.retain(|_, v| *v != address);
+    }
+    //
 
     pub async fn send_to_addr(
         &mut self,
@@ -90,7 +152,7 @@ impl Clients {
     }
 
     pub async fn broadcast(&mut self, message: Message) -> std::io::Result<()> {
-        for client in &mut self.0 {
+        for client in self.data_map.values_mut() {
             client.tx.send(message.clone()).await?;
         }
         Ok(())
@@ -101,8 +163,8 @@ impl Clients {
         address: SocketAddr,
         message: Message,
     ) -> std::io::Result<()> {
-        for client in &mut self.0 {
-            if client.addr == address {
+        for (addr, client) in self.data_map.iter_mut() {
+            if *addr == address {
                 continue;
             }
             client.tx.send(message.clone()).await?;
@@ -111,73 +173,131 @@ impl Clients {
     }
 }
 
-async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) {
-    let addr = socket.rx.0.peer_addr().unwrap();
-
-    let (mut rx, tx) = socket.into_split();
-    let client = ClientData::new(tx, addr);
-    println!("{} ({addr}) has connected.", client.name);
-
-    let mut lock = clients.lock().await;
-    _ = lock
-        .broadcast(Message::Text(format!("{} has connected.", client.name)))
-        .await;
-    lock.0.push(client);
-    drop(lock);
-
-    _ = tokio::join!(receive_messages(&mut rx, clients));
-}
-
 async fn on_disconnect(address: SocketAddr, clients: Arc<Mutex<Clients>>) {
     let mut lock = clients.lock().await;
-    let client_name = lock.by_addr(address).unwrap().name;
+    let client_name = lock.by_addr(address).unwrap().name.clone();
     println!("{client_name} ({address}) has disconnected.");
     _ = lock
         .broadcast_except_one(
             address,
-            Message::Text(format!("{client_name} has disconnected.",)),
+            protocol::ServerMessage::ServerNotification(
+                format!("{client_name} has disconnected.",),
+            )
+            .into(),
         )
         .await;
-    if let Some(pos) = lock.0.iter().position(|socket| socket.addr == address) {
-        lock.0.remove(pos);
-    }
+    lock.disconnect(address).await;
 }
 
-async fn receive_messages(
-    rx: &mut WsRecvHalf<Client>,
-    clients: Arc<Mutex<Clients>>,
-) -> std::io::Result<()> {
-    let sender_addr = rx.0.peer_addr()?;
-    let sender_name = clients
-        .lock()
+async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> std::io::Result<()> {
+    let (mut rx, tx) = socket.into_split();
+    let addr = rx.0.peer_addr()?;
+
+    if handle_auth(&mut rx, tx, Arc::clone(&clients))
         .await
-        .by_addr(sender_addr)
-        .ok_or(std::io::ErrorKind::NotFound)?
-        .name;
+        .is_err()
+    {
+        println!("{addr} didn't authenticate.");
+    }
 
     loop {
         match rx.receive().await {
-            Ok(Message::Text(text)) => {
-                println!("{sender_name}: `{text}`");
-                _ = clients
-                    .lock()
-                    .await
-                    .broadcast_except_one(
-                        sender_addr,
-                        Message::Text(format!("{sender_name}: {text}")),
-                    )
-                    .await;
-                _ = clients
-                    .lock()
-                    .await
-                    .send_to_addr(sender_addr, Message::Text(format!("You: {text}")))
-                    .await;
-            }
+            Ok(msg) => match protocol::ClientMessage::try_from(msg.clone()) {
+                Ok(message) => {
+                    handle_client_message(message, Arc::clone(&clients)).await?;
+                }
+                Err(e) => {
+                    println!("Received unknown message {msg:?} {e:?}")
+                }
+            },
             Err(_) => {
-                tokio::spawn(on_disconnect(sender_addr, clients));
+                on_disconnect(addr, clients).await;
                 break Ok(());
             }
-            _ => (),
+        }
+    }
+}
+
+async fn handle_auth(
+    rx: &mut WsRecvHalf<Client>,
+    tx: WsSendHalf<Client>,
+    clients: Arc<Mutex<Clients>>,
+) -> std::io::Result<()> {
+    let addr = tx.0.peer_addr()?;
+    let mut token: Option<protocol::Token> = None;
+
+    if let Ok(message) = dbg!(rx.receive().await) {
+        match protocol::ClientMessage::try_from(message) {
+            Ok(client_msg) => match client_msg {
+                protocol::ClientMessage::SimpleAuth => {
+                    token = clients
+                        .lock()
+                        .await
+                        .try_connect(addr, ClientData::new(tx))
+                        .await;
+                }
+                protocol::ClientMessage::Auth(sender) => {
+                    token = clients
+                        .lock()
+                        .await
+                        .try_connect(
+                            addr,
+                            ClientData {
+                                tx,
+                                name: sender.name,
+                                color: sender.color,
+                            },
+                        )
+                        .await;
+                }
+                _ => {}
+            },
+            Err(e) => {
+                println!("Couldn't decode message: {e:?}");
+            }
+        }
+    }
+
+    let token = token.ok_or(std::io::ErrorKind::ConnectionRefused)?;
+
+    println!("Sending token `{token:?}` to client.");
+    clients
+        .lock()
+        .await
+        .send_to_addr(
+            addr,
+            protocol::ServerMessage::AuthSuccess(Some(token)).into(),
+        )
+        .await?;
+    Ok(())
+}
+
+async fn handle_client_message(
+    message: protocol::ClientMessage,
+    clients: Arc<Mutex<Clients>>,
+) -> std::io::Result<()> {
+    match message {
+        protocol::ClientMessage::SendMessage { token, text } => {
+            let maybe_sender: Option<protocol::MessageSender> = clients
+                .lock()
+                .await
+                .by_token(token.clone())
+                .map(|client| client.into());
+            match maybe_sender {
+                Some(sender) => {
+                    clients
+                        .lock()
+                        .await
+                        .broadcast(protocol::ServerMessage::PropagateMessage(sender, text).into())
+                        .await?;
+                }
+                None => println!("Unknown sender with token `{token}`"),
+            }
+            Ok(())
+        }
+        msg => {
+            println!("Unhandled message {msg:?}");
+            Ok(())
         }
     }
 }

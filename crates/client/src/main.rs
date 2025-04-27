@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
+use common::protocol;
 use ratatui::{
     DefaultTerminal,
     crossterm::{
@@ -17,6 +18,13 @@ use websocket::{
     Server, WsRecv, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket, message::Message,
 };
 
+fn into_ratatui_color(color: protocol::Color) -> ratatui::style::Color {
+    match color {
+        protocol::Color::Text => ratatui::style::Color::Reset,
+        protocol::Color::Truecolor(r, g, b) => ratatui::style::Color::Rgb(r, g, b),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     WsMessage(Message),
@@ -31,7 +39,7 @@ pub enum Mode {
 }
 
 #[derive(Debug)]
-struct App {
+struct App<'a> {
     should_quit: bool,
 
     mode: Mode,
@@ -39,31 +47,24 @@ struct App {
     event_rx: UnboundedReceiver<Event>,
     ws_tx: WsSendHalf<Server>,
 
+    token: Option<String>,
     current_input: tui_input::Input,
-    received_messages: Vec<String>,
+    received_messages: Vec<Line<'a>>,
 }
 
-impl Widget for &App {
+impl Widget for &App<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let layout = Layout::vertical([Constraint::Fill(1), Constraint::Max(5)]);
         let [chat_area, input_area] = layout.areas(area);
         let bordered = Block::bordered().border_type(ratatui::widgets::BorderType::Rounded);
-        Paragraph::new(
-            self.received_messages
-                .iter()
-                .cloned()
-                .map(|line| line + "\n")
-                .reduce(|acc, i| acc + &i)
-                .unwrap_or(String::new())
-                .trim(),
-        )
-        .block(bordered.clone())
-        .scroll((
-            0,
-            self.current_input.visual_scroll(input_area.width as usize) as u16,
-        ))
-        .wrap(ratatui::widgets::Wrap { trim: true })
-        .render(chat_area, buf);
+        Paragraph::new(self.received_messages.clone())
+            .block(bordered.clone())
+            .scroll((
+                0,
+                self.current_input.visual_scroll(input_area.width as usize) as u16,
+            ))
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .render(chat_area, buf);
         Paragraph::new(self.current_input.value())
             .block(if self.mode == Mode::Insert {
                 bordered.blue()
@@ -75,19 +76,28 @@ impl Widget for &App {
     }
 }
 
-impl App {
+impl App<'_> {
     fn new(event_rx: UnboundedReceiver<Event>, ws_tx: WsSendHalf<Server>) -> Self {
         App {
             should_quit: false,
             mode: Mode::Normal,
             event_rx,
             ws_tx,
+            token: None,
             current_input: tui_input::Input::new(String::new()),
             received_messages: vec![],
         }
     }
 
+    async fn try_authenticate(&mut self) -> Result<()> {
+        self.ws_tx
+            .send(protocol::ClientMessage::SimpleAuth.into())
+            .await?;
+        Ok(())
+    }
+
     async fn run(&mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        self.try_authenticate().await?;
         while !self.should_quit {
             self.handle_events().await?;
             terminal.draw(|frame| self.draw(frame))?;
@@ -139,15 +149,49 @@ impl App {
         Ok(())
     }
     async fn handle_ws_message(&mut self, message: Message) -> Result<()> {
-        if let Message::Text(msg) = message {
-            self.received_messages.push(msg);
+        if let Ok(server_msg) = protocol::ServerMessage::try_from(message.clone()) {
+            match server_msg {
+                protocol::ServerMessage::AuthSuccess(None) => {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    self.try_authenticate().await?
+                }
+                protocol::ServerMessage::AuthSuccess(Some(token)) => {
+                    self.token = Some(token);
+                }
+                protocol::ServerMessage::PropagateMessage(sender, text) => {
+                    self.received_messages.push(
+                        Span::styled(
+                            sender.name,
+                            Style::new().fg(into_ratatui_color(sender.color)),
+                        ) + Span::raw(": ")
+                            + Span::raw(text),
+                    );
+                }
+                protocol::ServerMessage::ServerNotification(text) => {
+                    self.received_messages
+                        .push(Span::styled(text, Style::new().gray().italic()).into());
+                }
+            }
+        } else {
+            self.received_messages
+                .push(Line::from(format!("Couln't parse message: {message:?}")));
         }
         Ok(())
     }
 
     async fn send_chat_message(&mut self) -> Result<()> {
+        if self.token.is_none() {
+            return Ok(());
+        }
+
         self.ws_tx
-            .send(Message::Text(self.current_input.to_string()))
+            .send(
+                protocol::ClientMessage::SendMessage {
+                    token: self.token.clone().unwrap(),
+                    text: self.current_input.to_string(),
+                }
+                .into(),
+            )
             .await?;
         self.current_input.reset();
         Ok(())

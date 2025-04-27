@@ -86,10 +86,8 @@ impl WsRecv for WsRecvHalf<Server> {
             .await
             .map_err(|_| StatusCode::InternalServerError)?;
 
-        {
-            let frame: Frame = data.try_into().map_err(|_| StatusCode::ProtocolError)?;
-            frame.try_into()
-        }
+        let frame: Frame = data.try_into().map_err(|_| StatusCode::ProtocolError)?;
+        frame.try_into()
     }
 }
 
@@ -121,11 +119,9 @@ impl WsRecv for WsRecvHalf<Client> {
             .await
             .map_err(|_| StatusCode::InternalServerError)?;
 
-        {
-            let mut frame: Frame = data.try_into().map_err(|_| StatusCode::ProtocolError)?;
-            frame.mask();
-            frame.try_into()
-        }
+        let mut frame: Frame = data.try_into().map_err(|_| StatusCode::ProtocolError)?;
+        frame.mask();
+        frame.try_into()
     }
 }
 
