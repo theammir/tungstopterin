@@ -81,24 +81,24 @@ impl ClientData {
 }
 
 struct Clients {
-    pub data_map: HashMap<SocketAddr, ClientData>,
+    pub addr_map: HashMap<SocketAddr, ClientData>,
     pub token_map: HashMap<protocol::Token, SocketAddr>,
 }
 
 impl Clients {
     pub fn new() -> Self {
         Clients {
-            data_map: HashMap::new(),
+            addr_map: HashMap::new(),
             token_map: HashMap::new(),
         }
     }
 
     pub fn by_addr(&self, address: SocketAddr) -> Option<&ClientData> {
-        self.data_map.get(&address)
+        self.addr_map.get(&address)
     }
 
     pub fn by_addr_mut(&mut self, address: SocketAddr) -> Option<&mut ClientData> {
-        self.data_map.get_mut(&address)
+        self.addr_map.get_mut(&address)
     }
 
     pub fn by_token(&self, token: protocol::Token) -> Option<&ClientData> {
@@ -124,7 +124,7 @@ impl Clients {
         address: SocketAddr,
         client: ClientData,
     ) -> Option<protocol::Token> {
-        if self.data_map.insert(address, client).is_none() {
+        if self.addr_map.insert(address, client).is_none() {
             let token = self.generate_token(address);
             self.token_map.insert(token.clone(), address);
             Some(token)
@@ -134,7 +134,7 @@ impl Clients {
     }
 
     pub async fn disconnect(&mut self, address: SocketAddr) {
-        self.data_map.remove(&address);
+        self.addr_map.remove(&address);
         self.token_map.retain(|_, v| *v != address);
     }
     //
@@ -152,7 +152,7 @@ impl Clients {
     }
 
     pub async fn broadcast(&mut self, message: Message) -> std::io::Result<()> {
-        for client in self.data_map.values_mut() {
+        for client in self.addr_map.values_mut() {
             client.tx.send(message.clone()).await?;
         }
         Ok(())
@@ -163,7 +163,7 @@ impl Clients {
         address: SocketAddr,
         message: Message,
     ) -> std::io::Result<()> {
-        for (addr, client) in self.data_map.iter_mut() {
+        for (addr, client) in self.addr_map.iter_mut() {
             if *addr == address {
                 continue;
             }
@@ -175,18 +175,18 @@ impl Clients {
 
 async fn on_disconnect(address: SocketAddr, clients: Arc<Mutex<Clients>>) {
     let mut lock = clients.lock().await;
-    let client_name = lock.by_addr(address).unwrap().name.clone();
-    println!("{client_name} ({address}) has disconnected.");
-    _ = lock
-        .broadcast_except_one(
-            address,
-            protocol::ServerMessage::ServerNotification(
-                format!("{client_name} has disconnected.",),
+    let client_name = lock.by_addr(address).map(|client| client.name.clone());
+    if let Some(name) = client_name {
+        println!("{name} ({address}) has disconnected.");
+        _ = lock
+            .broadcast_except_one(
+                address,
+                protocol::ServerMessage::ServerNotification(format!("{name} has disconnected.",))
+                    .into(),
             )
-            .into(),
-        )
-        .await;
-    lock.disconnect(address).await;
+            .await;
+        lock.disconnect(address).await;
+    }
 }
 
 async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> std::io::Result<()> {
@@ -224,51 +224,61 @@ async fn handle_auth(
     clients: Arc<Mutex<Clients>>,
 ) -> std::io::Result<()> {
     let addr = tx.0.peer_addr()?;
-    let mut token: Option<protocol::Token> = None;
+    let maybe_token: Option<protocol::Token>;
+    let new_sender: protocol::MessageSender;
 
-    if let Ok(message) = dbg!(rx.receive().await) {
-        match protocol::ClientMessage::try_from(message) {
-            Ok(client_msg) => match client_msg {
-                protocol::ClientMessage::SimpleAuth => {
-                    token = clients
-                        .lock()
-                        .await
-                        .try_connect(addr, ClientData::new(tx))
-                        .await;
-                }
-                protocol::ClientMessage::Auth(sender) => {
-                    token = clients
-                        .lock()
-                        .await
-                        .try_connect(
-                            addr,
-                            ClientData {
-                                tx,
-                                name: sender.name,
-                                color: sender.color,
-                            },
-                        )
-                        .await;
-                }
-                _ => {}
-            },
-            Err(e) => {
-                println!("Couldn't decode message: {e:?}");
-            }
+    let message = match rx.receive().await {
+        Ok(msg) => msg,
+        Err(_) => return Err(std::io::ErrorKind::ConnectionRefused.into()),
+    };
+
+    let client_msg = match protocol::ClientMessage::try_from(message) {
+        Ok(msg) => msg,
+        Err(_) => {
+            println!("Couldn't decode message");
+            return Err(std::io::ErrorKind::InvalidData.into());
         }
+    };
+
+    match client_msg {
+        protocol::ClientMessage::SimpleAuth => {
+            let data = ClientData::new(tx);
+            new_sender = (&data).into();
+            maybe_token = clients.lock().await.try_connect(addr, data).await;
+        }
+        protocol::ClientMessage::Auth(sender) => {
+            new_sender = sender;
+            maybe_token = clients
+                .lock()
+                .await
+                .try_connect(
+                    addr,
+                    ClientData {
+                        tx,
+                        name: new_sender.name.clone(),
+                        color: new_sender.color,
+                    },
+                )
+                .await;
+        }
+        _ => return Err(std::io::ErrorKind::ConnectionRefused.into()),
     }
 
-    let token = token.ok_or(std::io::ErrorKind::ConnectionRefused)?;
+    let token = maybe_token.ok_or(std::io::ErrorKind::ConnectionRefused)?;
 
-    println!("Sending token `{token:?}` to client.");
-    clients
-        .lock()
-        .await
-        .send_to_addr(
-            addr,
-            protocol::ServerMessage::AuthSuccess(Some(token)).into(),
-        )
-        .await?;
+    println!("{} ({addr}) has connected.", new_sender.name);
+    let mut lock = clients.lock().await;
+    lock.send_to_addr(
+        addr,
+        protocol::ServerMessage::AuthSuccess(Some(token)).into(),
+    )
+    .await?;
+    lock.broadcast_except_one(
+        addr,
+        protocol::ServerMessage::ServerNotification(format!("{} has connected.", new_sender.name))
+            .into(),
+    )
+    .await?;
     Ok(())
 }
 

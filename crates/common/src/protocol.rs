@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use websocket::message::Message;
 
 pub type Token = String;
+
+#[non_exhaustive]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// An auth request with a user's display name and its color.
@@ -35,6 +37,7 @@ impl TryFrom<Message> for ClientMessage {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// Whether the server accepts [ClientMessage::Auth].
@@ -43,6 +46,12 @@ pub enum ServerMessage {
     PropagateMessage(MessageSender, String),
     /// A message from server.
     ServerNotification(String),
+    // TODO: Utilize these
+    //
+    /// A message about a new client being connected.
+    ClientConnected(MessageSender),
+    /// A message about a client being disconnected.
+    ClientDisconnected(MessageSender),
 }
 
 impl From<ServerMessage> for Message {
@@ -71,9 +80,16 @@ pub struct MessageSender {
     pub color: Color,
 }
 
+#[non_exhaustive]
 #[derive(Debug, Default, Clone, Copy, Hash, Serialize, Deserialize)]
 pub enum Color {
     #[default]
     Text,
     Truecolor(u8, u8, u8),
+    Red,
+    Yellow,
+    Green,
+    Cyan,
+    Blue,
+    Magenta,
 }

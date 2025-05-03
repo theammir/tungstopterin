@@ -41,7 +41,7 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Creates a new `Frame` with an initialized masking key.
+    /// Creates a new [Frame] with an initialized masking key.
     /// No actual masking is done, and is the responsibility of the caller,
     /// see [Frame::mask].
     pub fn new(fin: bool, opcode: Opcode, payload: Vec<u8>) -> Self {
