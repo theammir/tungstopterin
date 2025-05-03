@@ -1,14 +1,13 @@
-use color_eyre::{eyre::Result, owo_colors::OwoColorize};
+use color_eyre::eyre::Result;
 use common::protocol;
 use ratatui::{
     Frame,
-    crossterm::event::{self, KeyCode},
+    crossterm::event::{self},
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Style, Stylize},
     text::Line,
     widgets::{
-        Block, BorderType, Borders, Clear, List, ListItem, ListState, Paragraph, StatefulWidget,
-        Widget,
+        Block, BorderType, Clear, List, ListItem, ListState, Paragraph, StatefulWidget, Widget,
     },
 };
 use tokio::sync::mpsc::UnboundedSender;
@@ -85,6 +84,27 @@ impl Auth {
         )?;
         Ok(())
     }
+
+    async fn handle_input_event(&mut self, event: event::KeyEvent) -> Result<bool> {
+        Ok(self
+            .nickname_input
+            .handle_event(&event::Event::Key(event))
+            .is_some())
+    }
+
+    async fn handle_colors_event(&mut self, event: event::KeyEvent) -> Result<bool> {
+        Ok(match event.code {
+            event::KeyCode::Char('j' | 's') | event::KeyCode::Down => {
+                self.color_list.state.select_next();
+                true
+            }
+            event::KeyCode::Char('k' | 'w') | event::KeyCode::Up => {
+                self.color_list.state.select_previous();
+                true
+            }
+            _ => false,
+        })
+    }
 }
 
 fn center_area(area: Rect, horizontal: Constraint, vertical: Constraint) -> Rect {
@@ -154,18 +174,16 @@ impl Component for Auth {
         if !is_focused {
             return Ok(false);
         }
-        Ok(match event {
-            AppEvent::KeyEvent(key_event) => match key_event.code {
-                event::KeyCode::Char('q') if self.focus != Focus::Input => {
+        if let AppEvent::KeyEvent(key_event) = event {
+            if match self.focus {
+                Focus::Input => self.handle_input_event(key_event).await?,
+                Focus::Colors => self.handle_colors_event(key_event).await?,
+            } {
+                return Ok(true);
+            }
+            Ok(match key_event.code {
+                event::KeyCode::Char('q') => {
                     self.event_tx.send(AppEvent::CompUnfocus)?;
-                    true
-                }
-                event::KeyCode::Char('j') | event::KeyCode::Down if self.focus == Focus::Colors => {
-                    self.color_list.state.select_next();
-                    true
-                }
-                event::KeyCode::Char('k') | event::KeyCode::Up if self.focus == Focus::Colors => {
-                    self.color_list.state.select_previous();
                     true
                 }
                 event::KeyCode::Tab => {
@@ -177,12 +195,10 @@ impl Component for Auth {
                     self.event_tx.send(AppEvent::CompUnfocus)?;
                     true
                 }
-                _ => self
-                    .nickname_input
-                    .handle_event(&event::Event::Key(key_event))
-                    .is_some(),
-            },
-            _ => false,
-        })
+                _ => false,
+            })
+        } else {
+            Ok(false)
+        }
     }
 }

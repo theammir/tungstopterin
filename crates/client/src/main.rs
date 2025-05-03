@@ -58,7 +58,7 @@ pub enum AppEvent {
     /// Incoming terminal KeyEvent.
     KeyEvent(crossterm::event::KeyEvent),
 
-    /// Move component focus one position down the stack.
+    /// Pop from the stack, *destroying a component*, and move focus one position down.
     CompUnfocus,
     /// Move component focus one position up the stack, if possible.
     CompFocus,

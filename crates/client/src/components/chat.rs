@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use color_eyre::eyre::Result;
 use common::protocol;
 use ratatui::{
@@ -75,7 +73,7 @@ impl Chat<'_> {
         if let Ok(server_msg) = protocol::ServerMessage::try_from(message.clone()) {
             match server_msg {
                 protocol::ServerMessage::AuthSuccess(None) => {
-                    self.event_tx.send(AppEvent::SpawnAuth);
+                    self.event_tx.send(AppEvent::SpawnAuth)?;
                 }
                 protocol::ServerMessage::AuthSuccess(Some(token)) => {
                     self.token = Some(token);
