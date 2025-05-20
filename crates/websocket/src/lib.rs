@@ -128,6 +128,10 @@ pub trait WsRecv {
     async fn receive(&mut self) -> Result<Message, MessageError>;
 }
 
+// TODO: Fix essentially duplicate implementations. Can I make a default implementation
+// of `read_http_bytes`, `read_frame_bytes`, `receive` and `send` somewhere else than module level
+// to make minor changes in individual impls?
+
 impl WsRecv for WsRecvHalf<Server> {
     async fn read_http_bytes(&mut self) -> std::io::Result<Vec<u8>> {
         read_http_bytes(&mut self.0).await
@@ -138,15 +142,29 @@ impl WsRecv for WsRecvHalf<Server> {
     }
 
     async fn receive(&mut self) -> Result<Message, MessageError> {
-        let data = self
-            .read_frame_bytes()
-            .await
-            .map_err(|_| MessageError::ProtocolViolated(StatusCode::InternalServerError))?;
+        let mut frames: Vec<Frame> = vec![];
+        loop {
+            let data = self
+                .read_frame_bytes()
+                .await
+                .map_err(|_| MessageError::ProtocolViolated(StatusCode::InternalServerError))?;
+            let frame: Frame = data
+                .try_into()
+                .map_err(|_| MessageError::ProtocolViolated(StatusCode::ProtocolError))?;
+            let fin = frame.header.fin;
 
-        let frame: Frame = data
-            .try_into()
-            .map_err(|_| MessageError::ProtocolViolated(StatusCode::ProtocolError))?;
-        frame.try_into()
+            // avoid first allocation
+            if frames.is_empty() && fin {
+                return frame.try_into();
+            }
+
+            frames.push(frame);
+
+            if fin {
+                break;
+            }
+        }
+        frames.try_into()
     }
 }
 
@@ -177,15 +195,30 @@ impl WsRecv for WsRecvHalf<Client> {
     }
 
     async fn receive(&mut self) -> Result<Message, MessageError> {
-        let data = read_frame_bytes(&mut self.0)
-            .await
-            .map_err(|_| MessageError::ProtocolViolated(StatusCode::InternalServerError))?;
+        let mut frames: Vec<Frame> = vec![];
+        loop {
+            let data = self
+                .read_frame_bytes()
+                .await
+                .map_err(|_| MessageError::ProtocolViolated(StatusCode::InternalServerError))?;
+            let mut frame: Frame = data
+                .try_into()
+                .map_err(|_| MessageError::ProtocolViolated(StatusCode::ProtocolError))?;
+            frame.mask();
+            let fin = frame.header.fin;
 
-        let mut frame: Frame = data
-            .try_into()
-            .map_err(|_| MessageError::ProtocolViolated(StatusCode::ProtocolError))?;
-        frame.mask();
-        frame.try_into()
+            // avoid first allocation
+            if frames.is_empty() && fin {
+                return frame.try_into();
+            }
+
+            frames.push(frame);
+
+            if fin {
+                break;
+            }
+        }
+        frames.try_into()
     }
 }
 
