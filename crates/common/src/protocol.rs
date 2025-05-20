@@ -41,6 +41,7 @@ impl TryFrom<Message> for ClientMessage {
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// Whether the server accepts [ClientMessage::Auth].
+    // TODO: Provide specific errors (invalid nickname, already occupied)
     AuthSuccess(Option<Token>),
     /// A chat message from either this client or any other.
     PropagateMessage(MessageSender, String),

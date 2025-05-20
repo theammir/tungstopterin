@@ -183,7 +183,7 @@ impl Component for Auth {
             }
             Ok(match key_event.code {
                 event::KeyCode::Char('q') => {
-                    self.event_tx.send(AppEvent::CompUnfocus)?;
+                    self.event_tx.send(AppEvent::ComponentUnfocus)?;
                     true
                 }
                 event::KeyCode::Tab => {
@@ -192,7 +192,7 @@ impl Component for Auth {
                 }
                 event::KeyCode::Enter => {
                     self.try_authenticate().await?;
-                    self.event_tx.send(AppEvent::CompUnfocus)?;
+                    self.event_tx.send(AppEvent::ComponentUnfocus)?;
                     true
                 }
                 _ => false,

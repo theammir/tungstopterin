@@ -28,16 +28,77 @@ impl TryFrom<u8> for Opcode {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct Frame {
+/// A length of [Frame] payload. Due to the header being possibly partially parsed,
+/// can hold not only actual len, but also hints to parse next u16 or u64.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PayloadLen {
+    /// The value of the 7 length bits
+    ExactU8(u8),
+    /// The value of the 2 extra length bytes
+    ExactU16(u16),
+    /// The value of the 8 extra length bytes
+    ExactU64(u64),
+    /// Corresponds to length bits set to 126.
+    /// Contains no actual length info.
+    HintU16,
+    /// Corresponds to length bits set to 127.
+    /// Contains no actual length info.
+    HintU64,
+}
+
+impl From<u64> for PayloadLen {
+    fn from(value: u64) -> Self {
+        const U8_MAX: u64 = 125u64;
+        const U16_MAX: u64 = u16::MAX as u64;
+        const U64_MAX: u64 = u64::MAX;
+        #[allow(clippy::match_overlapping_arm)] // idk it's kinda readable
+        // in case it's not, the smallest possible variant is prioritized
+        match value {
+            0..=U8_MAX => Self::ExactU8(value as u8),
+            0..=U16_MAX => Self::ExactU16(value as u16),
+            0..=U64_MAX => Self::ExactU64(value),
+        }
+    }
+}
+
+/// [Frame] header that can be parsed from the first 2 bytes of it.
+/// If the length is 126 or 127, respective [PayloadLen] hint will be assigned.
+/// Enough bytes in the slice will convert to instance with exact length of the smallest possible
+/// unsigned int size.
+#[derive(Debug, Clone, Copy)]
+pub struct FrameHeader {
     pub fin: bool,
-    /// Only 3 least significant bits count.
+    /// Only 3 rightmost bits count: RSV1 RSV2 RSV3 in BE order.
+    // Honestly it just sounds like a better idea to use 3 bools now.
     /// Should really remain all 0s for the purposes of this lib.
     pub rsv: u8,
     pub opcode: Opcode,
-    pub payload_len: u64,
+    // Super Rustacean API of bool + Option
+    pub masked: bool,
+    pub payload_len: PayloadLen,
+}
+
+/// WebSocket Frame consisting of a [FrameHeader], a payload, and an optional masking key.
+#[derive(Debug, Clone)]
+pub struct Frame {
+    pub header: FrameHeader,
     pub masking_key: Option<u32>,
     pub payload: Vec<u8>,
+}
+
+impl FrameHeader {
+    /// Creates a new [FrameHeader] with an initialized masking key.
+    /// No actual masking is done, and is the responsibility of the caller,
+    /// see [Frame::mask].
+    pub fn new(fin: bool, opcode: Opcode, masked: bool, payload_len: u64) -> Self {
+        FrameHeader {
+            fin,
+            rsv: 0,
+            opcode,
+            masked,
+            payload_len: payload_len.into(),
+        }
+    }
 }
 
 impl Frame {
@@ -46,14 +107,12 @@ impl Frame {
     /// see [Frame::mask].
     pub fn new(fin: bool, opcode: Opcode, payload: Vec<u8>) -> Self {
         Frame {
-            fin,
-            rsv: 0,
-            opcode,
-            payload_len: payload.len() as u64,
-            masking_key: Some(rand::rng().next_u32()),
+            header: FrameHeader::new(fin, opcode, true, payload.len() as u64),
             payload,
+            masking_key: Some(rand::rng().next_u32()),
         }
     }
+
     /// Masks the payload.
     /// The operation is *involutory*, meaning that unmasking is done
     /// through this method as well.
@@ -68,40 +127,39 @@ impl Frame {
     }
 }
 
-impl From<Frame> for Vec<u8> {
-    fn from(value: Frame) -> Self {
-        const U16_MAX: u64 = u16::MAX as u64;
-        let mut result = Vec::with_capacity(
-            value.payload_len as usize + 2 + if value.masking_key.is_some() { 4 } else { 0 },
-        );
+impl From<FrameHeader> for Vec<u8> {
+    fn from(value: FrameHeader) -> Self {
+        let mut result = Vec::with_capacity(2 + if value.masked { 4 } else { 0 });
 
         let first_bit =
             ((value.fin as u8) << 7) | ((value.rsv & 0b00000111) << 4) | value.opcode as u8;
         result.push(first_bit);
 
-        let mut second_bit = (value.masking_key.is_some() as u8) << 7;
+        let mut second_bit = (value.masked as u8) << 7;
         match value.payload_len {
-            0..=125 => {
-                second_bit |= value.payload_len as u8;
+            PayloadLen::ExactU8(len) => {
+                second_bit |= len;
                 result.push(second_bit);
             }
-            126..=U16_MAX => {
+            PayloadLen::ExactU16(len) => {
                 second_bit |= 126;
                 result.push(second_bit);
-                result.extend_from_slice(&((value.payload_len as u16).to_be_bytes()));
+                result.extend_from_slice(&((len).to_be_bytes()));
             }
-            _ => {
+            PayloadLen::ExactU64(len) => {
                 second_bit |= 127;
                 result.push(second_bit);
-                result.extend_from_slice(&value.payload_len.to_be_bytes());
+                result.extend_from_slice(&len.to_be_bytes());
+            }
+            PayloadLen::HintU16 => {
+                second_bit |= 126;
+                result.push(second_bit);
+            }
+            PayloadLen::HintU64 => {
+                second_bit |= 127;
+                result.push(second_bit);
             }
         }
-
-        if let Some(key) = value.masking_key {
-            result.extend_from_slice(&key.to_be_bytes());
-        }
-
-        result.extend_from_slice(&value.payload);
 
         result
     }
@@ -117,90 +175,110 @@ pub enum FrameError {
     PayloadTooShort,
 }
 
-impl TryFrom<Vec<u8>> for Frame {
+impl TryFrom<&[u8]> for FrameHeader {
     type Error = FrameError;
 
-    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
         if value.len() < 2 {
             return Err(FrameError::FrameTooShort);
         }
 
-        let mut last_len_byte: usize = 1;
-        let payload_len: u64 = {
+        let payload_len = {
             let len_header = value[1] & 0b01111111;
             match len_header {
-                0..=125 => len_header as u64,
+                0..=125 => PayloadLen::ExactU8(len_header),
                 126 => {
                     const U16_LEN: usize = 2;
-                    last_len_byte += U16_LEN;
-                    u16::from_be_bytes(
-                        value
-                            .get(2..2 + U16_LEN)
-                            .ok_or(FrameError::LengthParsing)?
-                            .try_into()
-                            .unwrap(),
-                    ) as u64
+                    value
+                        .get(2..2 + U16_LEN)
+                        .map(|slice| {
+                            PayloadLen::ExactU16(u16::from_be_bytes(slice.try_into().unwrap()))
+                        })
+                        .unwrap_or(PayloadLen::HintU16)
                 }
                 127 => {
                     const U64_LEN: usize = 8;
-                    last_len_byte += U64_LEN;
-                    u64::from_be_bytes(
-                        value
-                            .get(2..2 + U64_LEN)
-                            .ok_or(FrameError::LengthParsing)?
-                            .try_into()
-                            .unwrap(),
-                    )
+                    value
+                        .get(2..2 + U64_LEN)
+                        .map(|slice| {
+                            PayloadLen::ExactU64(u64::from_be_bytes(slice.try_into().unwrap()))
+                        })
+                        .unwrap_or(PayloadLen::HintU64)
                 }
                 _ => unreachable!(),
             }
         };
-
-        const U32_LEN: usize = 4;
-        let mut last_key_byte: usize = last_len_byte + 1;
-        let masking_key = (value[1] >> 7 != 0) // is masked bit
-            .then(|| {
-                value
-                    .get(last_key_byte..last_key_byte + U32_LEN)
-                    .ok_or(FrameError::MaskingKeyParsing)
-            })
-            .transpose()?
-            .map(|bytes| u32::from_be_bytes(bytes.try_into().unwrap()));
-
-        if masking_key.is_some() {
-            last_key_byte += U32_LEN;
-        }
 
         Ok(Self {
             fin: (value[0] >> 7) != 0,
             rsv: (value[0] & 0b01110000) >> 4,
             opcode: Opcode::try_from(value[0] & 0b00001111)
                 .map_err(|_| FrameError::InvalidOpcode)?,
+            masked: (value[1] >> 7) != 0,
             payload_len,
+        })
+    }
+}
+
+impl From<Frame> for Vec<u8> {
+    fn from(value: Frame) -> Self {
+        let mut header: Vec<u8> = value.header.into();
+        if let Some(key) = value.masking_key {
+            header.extend_from_slice(&key.to_be_bytes());
+        }
+        header.extend(value.payload);
+        header
+    }
+}
+
+impl TryFrom<Vec<u8>> for Frame {
+    type Error = FrameError;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
+        const MASKING_KEY_LEN: usize = 4;
+        let header: FrameHeader = value.as_slice().try_into()?;
+        let masking_key_index = match header.payload_len {
+            PayloadLen::ExactU8(_) => 2,
+            PayloadLen::ExactU16(_) => 4,
+            PayloadLen::ExactU64(_) => 10,
+            _ => Err(FrameError::LengthParsing)?,
+        };
+        let masking_key = (header.masked)
+            .then(|| {
+                value
+                    .get(masking_key_index..masking_key_index + MASKING_KEY_LEN)
+                    .ok_or(FrameError::MaskingKeyParsing)
+                    .map(|bytes| <[u8; 4]>::try_from(bytes).unwrap())
+                    .map(u32::from_be_bytes)
+            })
+            .transpose()?;
+        Ok(Frame {
+            header,
             masking_key,
-            payload: {
-                let mut payload = value
-                    .get(last_key_byte..)
-                    .ok_or(FrameError::PayloadTooShort)?
-                    .to_vec();
-                payload.truncate(payload_len as usize);
-                payload
-            },
+            payload: value
+                .get(masking_key_index + MASKING_KEY_LEN..)
+                .ok_or(FrameError::PayloadTooShort)?
+                .to_vec(),
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Frame, Opcode};
+    use crate::frame::{Frame, PayloadLen};
+
+    use super::{FrameHeader, Opcode};
 
     #[test]
     fn unmasked_64bit_frame_into_bytes() {
         let unmasked_long = Frame {
-            fin: false,
-            rsv: 0,
-            opcode: Opcode::Binary,
-            payload_len: 69420,
+            header: FrameHeader {
+                fin: false,
+                rsv: 0,
+                opcode: Opcode::Binary,
+                masked: false,
+                payload_len: PayloadLen::ExactU64(69420),
+            },
             masking_key: None,
             payload: vec![0xde, 0xad, 0xbe, 0xef],
         };
@@ -221,10 +299,13 @@ mod tests {
     #[test]
     fn masked_7bit_frame_into_bytes() {
         let mut masked_7bit = Frame {
-            fin: true,
-            rsv: 3,
-            opcode: Opcode::Continue,
-            payload_len: 3,
+            header: FrameHeader {
+                fin: true,
+                rsv: 3,
+                opcode: Opcode::Continue,
+                masked: true,
+                payload_len: PayloadLen::ExactU8(3),
+            },
             masking_key: Some(12345),
             payload: vec![0xff, 0x00, 0xff],
         };
@@ -256,7 +337,7 @@ mod tests {
 
     #[test]
     fn unmasked_64bit_raw_into_frame() {
-        let unmasked_long_bytes = vec![2_u8, 127, 0, 0, 0, 0, 0, 1, 15, 44, 222, 173, 190, 239];
+        let unmasked_long_bytes = vec![2_u8, 127, 0, 0, 0, 0, 0, 0, 0, 4, 222, 173, 190, 239];
         println!("Raw unmasked 64-bit length:");
         for byte in &unmasked_long_bytes {
             print!("{:08b} ", byte);
@@ -266,10 +347,14 @@ mod tests {
         let frame: Frame = unmasked_long_bytes.try_into().unwrap();
         println!("Reconstructed: {:?}\n", frame);
 
-        assert!(!frame.fin, "incorrect FIN bit");
-        assert_eq!(frame.rsv, 0, "incorrect RSV bits");
-        assert!(frame.masking_key.is_none(), "incorrect masked bit");
-        assert_eq!(frame.payload_len, 69420, "incorrect payload length");
+        assert!(!frame.header.fin, "incorrect FIN bit");
+        assert_eq!(frame.header.rsv, 0, "incorrect RSV bits");
+        assert!(!frame.header.masked, "incorrect masked bit");
+        assert_eq!(
+            frame.header.payload_len,
+            PayloadLen::ExactU64(4),
+            "incorrect payload length"
+        );
     }
 
     #[test]
@@ -289,9 +374,13 @@ mod tests {
 
         println!("Unmasked 7-bit: {:?}", frame);
 
-        assert!(frame.fin, "incorrect FIN bit");
-        assert_eq!(frame.rsv, 3, "incorrect RSV bits");
-        assert!(frame.masking_key.is_some(), "incorrect masked bit");
-        assert_eq!(frame.payload_len, 3, "incorrect payload length");
+        assert!(frame.header.fin, "incorrect FIN bit");
+        assert_eq!(frame.header.rsv, 3, "incorrect RSV bits");
+        assert!(!frame.header.masked, "incorrect masked bit");
+        assert_eq!(
+            frame.header.payload_len,
+            PayloadLen::ExactU8(3),
+            "incorrect payload length"
+        );
     }
 }

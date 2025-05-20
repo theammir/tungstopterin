@@ -63,22 +63,36 @@ impl From<&Message> for Opcode {
     }
 }
 
+pub enum MessageError {
+    /// [Message] construction failed due to a protocol-related error.
+    ProtocolViolated(StatusCode),
+    /// Attempted [Message] construction from a single non-final frame.
+    /// Indicates that more frames are needed to form a [Message].
+    IsNotFinal,
+}
+
 impl TryFrom<Frame> for Message {
-    type Error = StatusCode;
+    type Error = MessageError;
 
     fn try_from(value: Frame) -> Result<Self, Self::Error> {
-        match value.opcode {
-            Opcode::Continue => Err(StatusCode::ProtocolError),
-            Opcode::Text => Ok(Message::Text(
-                String::from_utf8(value.payload).map_err(|_| StatusCode::InvalidPayloadData)?,
-            )),
+        if !value.header.fin {
+            return Err(MessageError::IsNotFinal);
+        }
+
+        match value.header.opcode {
+            Opcode::Continue => Err(MessageError::ProtocolViolated(StatusCode::ProtocolError)),
+            Opcode::Text => Ok(Message::Text(String::from_utf8(value.payload).map_err(
+                |_| MessageError::ProtocolViolated(StatusCode::InvalidPayloadData),
+            )?)),
             Opcode::Binary => Ok(Message::Binary(value.payload)),
             Opcode::Close => Ok(Message::Close(
                 (u16::from_be_bytes(
                     value
                         .payload
                         .get(0..2)
-                        .ok_or(StatusCode::ProtocolError)?
+                        .ok_or(MessageError::ProtocolViolated(
+                            StatusCode::InvalidPayloadData,
+                        ))?
                         .try_into()
                         .unwrap(),
                 ))
@@ -88,8 +102,9 @@ impl TryFrom<Frame> for Message {
                         .payload
                         .get(2..)
                         .map(|bytes| {
-                            String::from_utf8(bytes.to_vec())
-                                .map_err(|_| StatusCode::InvalidPayloadData)
+                            String::from_utf8(bytes.to_vec()).map_err(|_| {
+                                MessageError::ProtocolViolated(StatusCode::InvalidPayloadData)
+                            })
                         })
                         .transpose()?
                         .filter(|s| !s.is_empty())
@@ -102,13 +117,13 @@ impl TryFrom<Frame> for Message {
 }
 
 impl TryFrom<Vec<Frame>> for Message {
-    type Error = StatusCode;
+    type Error = MessageError;
 
     fn try_from(value: Vec<Frame>) -> Result<Self, Self::Error> {
         if value.is_empty() {
-            return Err(StatusCode::UnsupportedData);
+            return Err(MessageError::ProtocolViolated(StatusCode::UnsupportedData));
         }
-        if value[0].fin {
+        if value[0].header.fin {
             return value.into_iter().next().unwrap().try_into();
         }
 
@@ -121,8 +136,8 @@ impl TryFrom<Vec<Frame>> for Message {
                 acc
             })
             .unwrap();
-        first.fin = true;
-        first.payload_len = buffer.len() as u64;
+        first.header.fin = true;
+        first.header.payload_len = (buffer.len() as u64).into();
         first.payload = buffer;
         first.try_into()
     }

@@ -65,7 +65,7 @@ Host: {host}\r
 Upgrade: websocket\r
 Connection: upgrade\r
 Sec-Websocket-Key: {key}\r
-Sec-Websocket-Version: 13\r\n",
+Sec-Websocket-Version: 13\r\n\r\n",
                 host = "idk",
                 key = sec_key
             )
@@ -73,7 +73,7 @@ Sec-Websocket-Version: 13\r\n",
         )
         .await?;
         let response =
-            String::from_utf8(self.read_raw().await?).map_err(|_| ErrorKind::InvalidData)?;
+            String::from_utf8(self.read_http_bytes().await?).map_err(|_| ErrorKind::InvalidData)?;
 
         let resp_key = response
             .lines()
@@ -93,7 +93,7 @@ Sec-Websocket-Version: 13\r\n",
 
 impl IntoWebsocket for WsStream<Client> {
     async fn try_upgrade(&mut self) -> std::io::Result<()> {
-        let request = String::from_utf8(self.read_raw().await?.to_vec())
+        let request = String::from_utf8(self.read_http_bytes().await?.to_vec())
             .map_err(|_| ErrorKind::InvalidData)?;
 
         validate_upgrade_headers(&request);
@@ -111,7 +111,7 @@ impl IntoWebsocket for WsStream<Client> {
 HTTP/1.1 101 Switching Protocols\r
 Upgrade: websocket\r
 Connection: upgrade\r
-Sec-Websocket-Accept: {key}\r\n",
+Sec-Websocket-Accept: {key}\r\n\r\n",
             key = generate_response_key(sec_key.to_string())
         );
 

@@ -59,9 +59,9 @@ pub enum AppEvent {
     KeyEvent(crossterm::event::KeyEvent),
 
     /// Pop from the stack, *destroying a component*, and move focus one position down.
-    CompUnfocus,
+    ComponentUnfocus,
     /// Move component focus one position up the stack, if possible.
-    CompFocus,
+    ComponentFocus,
 
     /// Spawn [components::Auth] pop-up.
     SpawnAuth,
@@ -204,11 +204,11 @@ impl App {
                     _ => {}
                 }
             }
-            AppEvent::CompFocus => {
+            AppEvent::ComponentFocus => {
                 self.components.focus =
                     (self.components.focus + 1).min(self.components.inner.len() - 1);
             }
-            AppEvent::CompUnfocus => {
+            AppEvent::ComponentUnfocus => {
                 self.components.inner.remove(self.components.focus);
                 self.components.focus = self.components.focus.saturating_sub(1);
             }
@@ -216,7 +216,7 @@ impl App {
                 let mut auth = components::Auth::new(self.ws_tx.clone(), self.event_tx.clone());
                 if auth.init().await.is_ok() {
                     self.components.inner.push_back(auth);
-                    _ = self.event_tx.send(AppEvent::CompFocus);
+                    _ = self.event_tx.send(AppEvent::ComponentFocus);
                 }
             }
             _ => {}
@@ -228,7 +228,9 @@ impl App {
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let mut ws = WsStream::from_stream(TcpStream::connect("127.0.0.1:1337").await?);
+    let conn = TcpStream::connect("127.0.0.1:1337").await?;
+    conn.set_nodelay(true)?;
+    let mut ws = WsStream::from_stream(conn);
     ws.try_upgrade().await?;
     let (ws_rx, ws_tx) = ws.into_split();
 
