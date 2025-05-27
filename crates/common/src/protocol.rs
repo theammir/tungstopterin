@@ -26,12 +26,12 @@ impl From<ClientMessage> for Message {
     }
 }
 
-impl TryFrom<Message> for ClientMessage {
+impl TryFrom<&Message> for ClientMessage {
     type Error = ();
 
-    fn try_from(value: Message) -> Result<Self, Self::Error> {
+    fn try_from(value: &Message) -> Result<Self, Self::Error> {
         match value {
-            Message::Binary(buf) => Ok(rmp_serde::from_slice(&buf).map_err(|_| ())?),
+            Message::Binary(buf) => Ok(rmp_serde::from_slice(buf).map_err(|_| ())?),
             _ => Err(()),
         }
     }
@@ -64,12 +64,12 @@ impl From<ServerMessage> for Message {
     }
 }
 
-impl TryFrom<Message> for ServerMessage {
+impl TryFrom<&Message> for ServerMessage {
     type Error = ();
 
-    fn try_from(value: Message) -> Result<Self, Self::Error> {
+    fn try_from(value: &Message) -> Result<Self, Self::Error> {
         match value {
-            Message::Binary(buf) => Ok(rmp_serde::from_slice(&buf).map_err(|_| ())?),
+            Message::Binary(buf) => Ok(rmp_serde::from_slice(buf).map_err(|_| ())?),
             _ => Err(()),
         }
     }

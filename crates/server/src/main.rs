@@ -1,5 +1,6 @@
 use core::net::SocketAddr;
 use std::collections::HashMap;
+use std::io::ErrorKind;
 use std::sync::Mutex as SyncMutex;
 use std::sync::{Arc, OnceLock};
 
@@ -124,7 +125,9 @@ impl Clients {
         address: SocketAddr,
         client: ClientData,
     ) -> Option<protocol::Token> {
-        if self.addr_map.insert(address, client).is_none() {
+        if self.addr_map.values().any(|c| *c.name == client.name) {
+            None
+        } else if self.addr_map.insert(address, client).is_none() {
             let token = self.generate_token(address);
             self.token_map.insert(token.clone(), address);
             Some(token)
@@ -190,19 +193,21 @@ async fn on_disconnect(address: SocketAddr, clients: Arc<Mutex<Clients>>) {
 }
 
 async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> std::io::Result<()> {
-    let (mut rx, tx) = socket.into_split();
+    let (mut rx, mut tx) = socket.into_split();
     let addr = rx.0.peer_addr()?;
 
-    if handle_auth(&mut rx, tx, Arc::clone(&clients))
-        .await
-        .is_err()
-    {
-        println!("{addr} didn't authenticate.");
+    loop {
+        let result = handle_auth(&mut rx, tx, Arc::clone(&clients)).await;
+        match result {
+            Ok(None) => break,
+            Ok(Some(_tx)) => tx = _tx,
+            Err(_) => return Err(ErrorKind::InvalidData)?,
+        }
     }
 
     loop {
         match rx.receive().await {
-            Ok(msg) => match protocol::ClientMessage::try_from(msg.clone()) {
+            Ok(msg) => match protocol::ClientMessage::try_from(&msg) {
                 Ok(message) => {
                     handle_client_message(message, Arc::clone(&clients)).await?;
                 }
@@ -222,25 +227,22 @@ async fn handle_auth(
     rx: &mut WsRecvHalf<Client>,
     tx: WsSendHalf<Client>,
     clients: Arc<Mutex<Clients>>,
-) -> std::io::Result<()> {
+) -> std::io::Result<Option<WsSendHalf<Client>>> {
     let addr = tx.0.peer_addr()?;
-    let maybe_token: Option<protocol::Token>;
+    let client_msg = rx
+        .receive()
+        .await
+        .map(|msg| protocol::ClientMessage::try_from(&msg).ok())
+        .ok()
+        .flatten();
+
+    if client_msg.is_none() {
+        return Ok(Some(tx));
+    }
+
     let new_sender: protocol::MessageSender;
-
-    let message = match rx.receive().await {
-        Ok(msg) => msg,
-        Err(_) => return Err(std::io::ErrorKind::ConnectionRefused.into()),
-    };
-
-    let client_msg = match protocol::ClientMessage::try_from(message) {
-        Ok(msg) => msg,
-        Err(_) => {
-            println!("Couldn't decode message");
-            return Err(std::io::ErrorKind::InvalidData.into());
-        }
-    };
-
-    match client_msg {
+    let maybe_token: Option<protocol::Token>;
+    match client_msg.unwrap() {
         protocol::ClientMessage::SimpleAuth => {
             let data = ClientData::new(tx);
             new_sender = (&data).into();
@@ -261,25 +263,30 @@ async fn handle_auth(
                 )
                 .await;
         }
-        _ => return Err(std::io::ErrorKind::ConnectionRefused.into()),
+        _ => return Ok(Some(tx)),
     }
+    let auth_success = maybe_token.is_some();
 
-    let token = maybe_token.ok_or(std::io::ErrorKind::ConnectionRefused)?;
-
-    println!("{} ({addr}) has connected.", new_sender.name);
     let mut lock = clients.lock().await;
     lock.send_to_addr(
         addr,
-        protocol::ServerMessage::AuthSuccess(Some(token)).into(),
+        protocol::ServerMessage::AuthSuccess(maybe_token).into(),
     )
     .await?;
-    lock.broadcast_except_one(
-        addr,
-        protocol::ServerMessage::ServerNotification(format!("{} has connected.", new_sender.name))
+
+    if auth_success {
+        println!("{} ({addr}) has connected.", new_sender.name);
+        lock.broadcast_except_one(
+            addr,
+            protocol::ServerMessage::ServerNotification(format!(
+                "{} has connected.",
+                new_sender.name
+            ))
             .into(),
-    )
-    .await?;
-    Ok(())
+        )
+        .await?;
+    }
+    Ok(None)
 }
 
 async fn handle_client_message(

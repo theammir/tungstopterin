@@ -1,3 +1,5 @@
+use std::time;
+
 use color_eyre::eyre::Result;
 use common::protocol;
 use ratatui::{
@@ -70,7 +72,7 @@ impl Chat<'_> {
     }
 
     async fn handle_ws_message(&mut self, message: Message) -> Result<bool> {
-        if let Ok(server_msg) = protocol::ServerMessage::try_from(message.clone()) {
+        if let Ok(server_msg) = protocol::ServerMessage::try_from(&message) {
             match server_msg {
                 protocol::ServerMessage::AuthSuccess(None) => {
                     self.event_tx.send(AppEvent::SpawnAuth)?;
@@ -124,9 +126,7 @@ impl Component for Chat<'_> {
         Ok(())
     }
 
-    fn render(&mut self, frame: &mut Frame, area: Rect, is_focused: bool) {
-        _ = is_focused;
-
+    fn render(&mut self, frame: &mut Frame, area: Rect, _is_focused: bool) {
         let layout = Layout::vertical([Constraint::Fill(1), Constraint::Max(5)]);
         let [chat_area, input_area] = layout.areas(area);
         let bordered = Block::bordered().border_type(ratatui::widgets::BorderType::Rounded);

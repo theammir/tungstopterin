@@ -1,4 +1,7 @@
-use std::{collections::VecDeque, time::Duration};
+use std::{
+    collections::VecDeque,
+    time::{self, Duration},
+};
 
 use color_eyre::eyre::Result;
 use common::protocol;
@@ -65,12 +68,30 @@ pub enum AppEvent {
 
     /// Spawn [components::Auth] pop-up.
     SpawnAuth,
+
+    /// Spawn a notification for a period of time.
+    // TODO: Color coding depending on urgency.
+    Notify(String, time::Duration),
 }
 
 #[derive(Debug, Default)]
 struct ComponentStack {
     inner: VecDeque<Box<dyn Component + Send>>,
     focus: usize,
+}
+
+impl ComponentStack {
+    fn push_back(&mut self, component: Box<dyn Component + Send>) {
+        self.inner.push_back(component);
+    }
+
+    fn push_after_focused(&mut self, component: Box<dyn Component + Send>) {
+        self.inner.insert(self.focus + 1, component);
+    }
+
+    fn pop_focused(&mut self) {
+        self.inner.remove(self.focus);
+    }
 }
 
 #[derive(Debug)]
@@ -142,10 +163,11 @@ impl App {
     }
 
     async fn init_components(&mut self) -> Result<()> {
-        self.components.inner.push_back(components::Chat::new(
+        self.components.push_back(components::Chat::new(
             self.ws_tx.clone(),
             self.event_tx.clone(),
         ));
+        self.components.push_back(components::Notification::new());
 
         for component in self.components.inner.iter_mut() {
             component.init().await?;
@@ -209,14 +231,18 @@ impl App {
                     (self.components.focus + 1).min(self.components.inner.len() - 1);
             }
             AppEvent::ComponentUnfocus => {
-                self.components.inner.remove(self.components.focus);
+                self.components.pop_focused();
                 self.components.focus = self.components.focus.saturating_sub(1);
             }
             AppEvent::SpawnAuth => {
                 let mut auth = components::Auth::new(self.ws_tx.clone(), self.event_tx.clone());
                 if auth.init().await.is_ok() {
-                    self.components.inner.push_back(auth);
+                    self.components.push_after_focused(auth);
                     _ = self.event_tx.send(AppEvent::ComponentFocus);
+                    _ = self.event_tx.send(AppEvent::Notify(
+                        String::from("Spawned auth"),
+                        time::Duration::from_secs(3),
+                    ));
                 }
             }
             _ => {}
