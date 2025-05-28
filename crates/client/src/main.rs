@@ -1,3 +1,5 @@
+mod proxy;
+
 use std::{
     collections::VecDeque,
     time::{self, Duration},
@@ -254,7 +256,7 @@ impl App {
 async fn main() -> Result<()> {
     color_eyre::install()?;
 
-    let conn = TcpStream::connect("127.0.0.1:1337").await?;
+    let conn = proxy::proxied(TcpStream::connect("127.0.0.1:1337").await?).await?;
     conn.set_nodelay(true)?;
     let mut ws = WsStream::from_stream(conn);
     ws.try_upgrade().await?;
