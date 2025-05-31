@@ -1,4 +1,4 @@
-use std::time;
+use std::time::Duration;
 
 use color_eyre::eyre::Result;
 use common::protocol;
@@ -75,6 +75,10 @@ impl Chat<'_> {
         if let Ok(server_msg) = protocol::ServerMessage::try_from(&message) {
             match server_msg {
                 protocol::ServerMessage::AuthSuccess(None) => {
+                    self.event_tx.send(AppEvent::Notify(
+                        String::from("Auth unsuccessful, please try again."),
+                        Duration::from_secs(3),
+                    ))?;
                     self.event_tx.send(AppEvent::SpawnAuth)?;
                 }
                 protocol::ServerMessage::AuthSuccess(Some(token)) => {

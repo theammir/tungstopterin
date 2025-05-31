@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    time::{self, Duration},
-};
+use std::{collections::VecDeque, time::Duration};
 
 use color_eyre::eyre::Result;
 use common::protocol;
@@ -71,7 +68,7 @@ pub enum AppEvent {
 
     /// Spawn a notification for a period of time.
     // TODO: Color coding depending on urgency.
-    Notify(String, time::Duration),
+    Notify(String, Duration),
 }
 
 #[derive(Debug, Default)]
@@ -239,10 +236,6 @@ impl App {
                 if auth.init().await.is_ok() {
                     self.components.push_after_focused(auth);
                     _ = self.event_tx.send(AppEvent::ComponentFocus);
-                    _ = self.event_tx.send(AppEvent::Notify(
-                        String::from("Spawned auth"),
-                        time::Duration::from_secs(3),
-                    ));
                 }
             }
             _ => {}

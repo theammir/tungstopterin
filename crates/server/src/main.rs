@@ -45,6 +45,7 @@ fn random_colors_init() -> SyncMutex<RandomColors> {
     )
 }
 
+#[derive(Debug)]
 struct ClientData {
     tx: WsSendHalf<Client>,
     name: String,
@@ -124,15 +125,16 @@ impl Clients {
         &mut self,
         address: SocketAddr,
         client: ClientData,
-    ) -> Option<protocol::Token> {
+    ) -> Result<protocol::Token, ClientData> {
         if self.addr_map.values().any(|c| *c.name == client.name) {
-            None
-        } else if self.addr_map.insert(address, client).is_none() {
+            return Err(client);
+        }
+        if let Some(client) = self.addr_map.insert(address, client) {
+            Err(client)
+        } else {
             let token = self.generate_token(address);
             self.token_map.insert(token.clone(), address);
-            Some(token)
-        } else {
-            None
+            Ok(token)
         }
     }
 
@@ -241,7 +243,7 @@ async fn handle_auth(
     }
 
     let new_sender: protocol::MessageSender;
-    let maybe_token: Option<protocol::Token>;
+    let maybe_token: Result<protocol::Token, ClientData>;
     match client_msg.unwrap() {
         protocol::ClientMessage::SimpleAuth => {
             let data = ClientData::new(tx);
@@ -265,27 +267,30 @@ async fn handle_auth(
         }
         _ => return Ok(Some(tx)),
     }
-    let auth_success = maybe_token.is_some();
 
     let mut lock = clients.lock().await;
-    lock.send_to_addr(
-        addr,
-        protocol::ServerMessage::AuthSuccess(maybe_token).into(),
-    )
-    .await?;
 
-    if auth_success {
-        println!("{} ({addr}) has connected.", new_sender.name);
-        lock.broadcast_except_one(
+    if let Err(client_data) = maybe_token {
+        let mut tx = client_data.tx;
+        tx.send(protocol::ServerMessage::AuthSuccess(None).into())
+            .await?;
+        return Ok(Some(tx));
+    } else {
+        lock.send_to_addr(
             addr,
-            protocol::ServerMessage::ServerNotification(format!(
-                "{} has connected.",
-                new_sender.name
-            ))
-            .into(),
+            protocol::ServerMessage::AuthSuccess(maybe_token.ok()).into(),
         )
         .await?;
     }
+
+    println!("{} ({addr}) has connected.", new_sender.name);
+    lock.broadcast_except_one(
+        addr,
+        protocol::ServerMessage::ServerNotification(format!("{} has connected.", new_sender.name))
+            .into(),
+    )
+    .await?;
+
     Ok(None)
 }
 
