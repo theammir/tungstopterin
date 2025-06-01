@@ -133,20 +133,42 @@ impl Component for Chat<'_> {
     fn render(&mut self, frame: &mut Frame, area: Rect, _is_focused: bool) {
         let layout = Layout::vertical([Constraint::Fill(1), Constraint::Max(5)]);
         let [chat_area, input_area] = layout.areas(area);
-        let bordered = Block::bordered().border_type(ratatui::widgets::BorderType::Rounded);
+
+        let mut chat_block = Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .title_top(
+                (Span::raw(" j↓  k↑").bold().green() + Span::raw(" to scroll ")).right_aligned(),
+            )
+            .title_top((Span::raw(" q").bold().green() + Span::raw(" to quit ")).left_aligned());
+        if self.token.is_none() {
+            chat_block = chat_block.title_top(
+                Span::raw(" Authenticate first! ")
+                    .red()
+                    .into_centered_line(),
+            );
+        }
         Paragraph::new(self.received_messages.clone())
-            .block(bordered.clone())
+            .block(chat_block)
             .scroll((
                 0,
                 self.current_input.visual_scroll(input_area.width as usize) as u16,
             ))
             .wrap(ratatui::widgets::Wrap { trim: true })
             .render(chat_area, frame.buffer_mut());
+
+        let input_block = Block::bordered()
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .title_top(if self.mode == Mode::Normal {
+                Span::raw(" a/i").bold().green() + Span::raw(" to enter INSERT mode ")
+            } else {
+                Span::raw(" <ESC>").bold().green() + Span::raw(" to exit INSERT mode ")
+            })
+            .title_alignment(ratatui::layout::Alignment::Right);
         Paragraph::new(self.current_input.value())
             .block(if self.mode == Mode::Insert {
-                bordered.blue()
+                input_block.blue()
             } else {
-                bordered
+                input_block
             })
             .wrap(ratatui::widgets::Wrap { trim: false })
             .render(input_area, frame.buffer_mut());

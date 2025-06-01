@@ -5,7 +5,7 @@ use ratatui::{
     crossterm::event::{self},
     layout::{Constraint, Flex, Layout, Rect},
     style::{Color, Style, Stylize},
-    text::Line,
+    text::{Line, Span},
     widgets::{
         Block, BorderType, Clear, List, ListItem, ListState, Paragraph, StatefulWidget, Widget,
     },
@@ -134,15 +134,17 @@ impl Component for Auth {
         let [input_area, color_area] = Layout::vertical([Constraint::Max(3), Constraint::Fill(1)])
             .margin(1)
             .areas(area);
+
+        let input_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .title_top(Span::raw(" Nickname ").into_left_aligned_line());
         Paragraph::new(self.nickname_input.value())
             .wrap(ratatui::widgets::Wrap { trim: false })
-            .block(Block::bordered().border_type(BorderType::Rounded).style(
-                if self.focus == Focus::Input {
-                    Style::new().magenta()
-                } else {
-                    Style::new()
-                },
-            ))
+            .block(input_block.style(if self.focus == Focus::Input {
+                Style::new().magenta()
+            } else {
+                Style::new()
+            }))
             .render(input_area, frame.buffer_mut());
 
         let color_items = self.color_list.items.iter().map(|&item| {
@@ -152,8 +154,11 @@ impl Component for Auth {
             ListItem::from(Line::styled(String::from("◼ ") + item, color))
         });
 
+        let color_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .title_top(Span::raw(" Color ").into_left_aligned_line());
         let color_list = List::new(color_items)
-            .block(Block::bordered().border_type(BorderType::Rounded))
+            .block(color_block)
             .style(if self.focus == Focus::Colors {
                 Style::new().magenta()
             } else {
