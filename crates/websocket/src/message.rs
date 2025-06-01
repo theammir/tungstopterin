@@ -7,6 +7,9 @@ pub enum StatusCode {
     ProtocolError = 1002,
     UnsupportedData = 1003,
 
+    NoStatus = 1005,
+    CloseAbnormal = 1006,
+
     InvalidPayloadData = 1007,
     PolicyViolated = 1008,
     MessageTooBig = 1009,
@@ -21,6 +24,9 @@ impl From<u16> for StatusCode {
             1001 => Self::GoingAway,
             1002 => Self::ProtocolError,
             1003 => Self::UnsupportedData,
+
+            1005 => Self::NoStatus,
+            1006 => Self::CloseAbnormal,
 
             1007 => Self::InvalidPayloadData,
             1008 => Self::PolicyViolated,

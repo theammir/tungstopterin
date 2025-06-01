@@ -6,8 +6,9 @@ use std::sync::Arc;
 use common::protocol;
 use tokio::{net::TcpListener, sync::Mutex};
 use websocket::{
-    Client, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket,
-    message::Message,
+    Client, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream,
+    handshake::IntoWebsocket,
+    message::{Message, MessageError},
 };
 
 #[derive(Debug)]
@@ -156,7 +157,12 @@ async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> s
         match result {
             Ok(None) => break,
             Ok(Some(_tx)) => tx = _tx,
-            Err(_) => return Err(ErrorKind::InvalidData)?,
+            Err(_) => {
+                // currently has no effect, but is probably the
+                // right thing to do
+                on_disconnect(addr, clients).await;
+                return Ok(());
+            }
         }
     }
 
@@ -172,7 +178,7 @@ async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> s
             },
             Err(_) => {
                 on_disconnect(addr, clients).await;
-                break Ok(());
+                return Ok(());
             }
         }
     }
@@ -184,16 +190,14 @@ async fn handle_auth(
     clients: Arc<Mutex<Clients>>,
 ) -> std::io::Result<Option<WsSendHalf<Client>>> {
     let addr = tx.0.peer_addr()?;
-    let client_msg = rx
-        .receive()
-        .await
-        .map(|msg| protocol::ClientMessage::try_from(&msg).ok())
-        .ok()
-        .flatten();
 
-    if client_msg.is_none() {
-        return Ok(Some(tx));
-    }
+    let client_msg = match rx.receive().await {
+        Ok(msg) => protocol::ClientMessage::try_from(&msg).ok(),
+        Err(MessageError::ProtocolViolated(websocket::message::StatusCode::CloseAbnormal)) => {
+            return Err(ErrorKind::UnexpectedEof.into());
+        }
+        Err(_) => return Ok(Some(tx)),
+    };
 
     let new_sender: protocol::MessageSender;
     let maybe_token: Result<protocol::Token, ClientData>;

@@ -147,7 +147,7 @@ impl WsRecv for WsRecvHalf<Server> {
             let data = self
                 .read_frame_bytes()
                 .await
-                .map_err(|_| MessageError::ProtocolViolated(StatusCode::InternalServerError))?;
+                .map_err(|_| MessageError::ProtocolViolated(StatusCode::CloseAbnormal))?;
             let frame: Frame = data
                 .try_into()
                 .map_err(|_| MessageError::ProtocolViolated(StatusCode::ProtocolError))?;
@@ -200,7 +200,7 @@ impl WsRecv for WsRecvHalf<Client> {
             let data = self
                 .read_frame_bytes()
                 .await
-                .map_err(|_| MessageError::ProtocolViolated(StatusCode::InternalServerError))?;
+                .map_err(|_| MessageError::ProtocolViolated(StatusCode::CloseAbnormal))?;
             let mut frame: Frame = data
                 .try_into()
                 .map_err(|_| MessageError::ProtocolViolated(StatusCode::ProtocolError))?;
