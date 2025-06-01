@@ -25,9 +25,7 @@ struct ColorList {
 impl Default for ColorList {
     fn default() -> Self {
         Self {
-            items: vec![
-                "red", "yellow", "green", "cyan", "blue", "magenta", "default",
-            ],
+            items: vec!["red", "yellow", "green", "cyan", "blue", "magenta", "reset"],
             state: ListState::default(),
         }
     }

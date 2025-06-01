@@ -38,6 +38,7 @@ fn into_ratatui_color(color: protocol::Color) -> ratatui::style::Color {
 fn into_protocol_color(color: Color) -> protocol::Color {
     match color {
         Color::Reset => protocol::Color::Text,
+        Color::White => protocol::Color::Text,
         Color::Red => protocol::Color::Red,
         Color::Green => protocol::Color::Green,
         Color::Yellow => protocol::Color::Yellow,
