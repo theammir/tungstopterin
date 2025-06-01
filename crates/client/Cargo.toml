@@ -9,7 +9,7 @@ edition = "2024"
 websocket = { path = "../websocket" }
 common = { path = "../common" }
 tokio = { version = "*", features = ["full"] }
-ratatui = "0.29.0"
+ratatui = { version = "0.29.0", features = ["unstable-rendered-line-info"] }
 color-eyre = "0.6.3"
 tokio-util = "0.7.14"
 tui-input = "0.11.1"
