@@ -1,8 +1,7 @@
 use core::net::SocketAddr;
 use std::collections::HashMap;
 use std::io::ErrorKind;
-use std::sync::Mutex as SyncMutex;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use common::protocol;
 use tokio::{net::TcpListener, sync::Mutex};
@@ -10,40 +9,6 @@ use websocket::{
     Client, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket,
     message::Message,
 };
-
-// turns out writing a thread safe static iterator is significantly more tedious than... not
-type RandomNames = std::iter::Cycle<std::array::IntoIter<&'static str, 5>>;
-static RANDOM_NAMES: OnceLock<SyncMutex<RandomNames>> = OnceLock::new();
-fn random_names_init() -> SyncMutex<RandomNames> {
-    SyncMutex::new(
-        [
-            "Anonymous Cat",
-            "Anonymous Dog",
-            "Anonymous Lion",
-            "Anonymous Fox",
-            "Anonymous Bear",
-        ]
-        .into_iter()
-        .cycle(),
-    )
-}
-
-type RandomColors = std::iter::Cycle<std::array::IntoIter<protocol::Color, 6>>;
-static RANDOM_COLORS: OnceLock<SyncMutex<RandomColors>> = OnceLock::new();
-fn random_colors_init() -> SyncMutex<RandomColors> {
-    SyncMutex::new(
-        [
-            protocol::Color::Truecolor(255, 0, 0),
-            protocol::Color::Truecolor(0, 255, 0),
-            protocol::Color::Truecolor(0, 0, 255),
-            protocol::Color::Truecolor(255, 255, 0),
-            protocol::Color::Truecolor(0, 255, 255),
-            protocol::Color::Truecolor(255, 0, 255),
-        ]
-        .into_iter()
-        .cycle(),
-    )
-}
 
 #[derive(Debug)]
 struct ClientData {
@@ -66,18 +31,6 @@ impl From<&mut ClientData> for protocol::MessageSender {
         Self {
             name: value.name.to_string(),
             color: value.color,
-        }
-    }
-}
-
-impl ClientData {
-    fn new(tx: WsSendHalf<Client>) -> Self {
-        let mut names_lock = RANDOM_NAMES.get().unwrap().lock().unwrap();
-        let mut colors_lock = RANDOM_COLORS.get().unwrap().lock().unwrap();
-        ClientData {
-            tx,
-            name: names_lock.next().unwrap().to_string(),
-            color: colors_lock.next().unwrap(),
         }
     }
 }
@@ -245,11 +198,6 @@ async fn handle_auth(
     let new_sender: protocol::MessageSender;
     let maybe_token: Result<protocol::Token, ClientData>;
     match client_msg.unwrap() {
-        protocol::ClientMessage::SimpleAuth => {
-            let data = ClientData::new(tx);
-            new_sender = (&data).into();
-            maybe_token = clients.lock().await.try_connect(addr, data).await;
-        }
         protocol::ClientMessage::Auth(sender) => {
             new_sender = sender;
             maybe_token = clients
@@ -326,9 +274,6 @@ async fn handle_client_message(
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    RANDOM_NAMES.get_or_init(random_names_init);
-    RANDOM_COLORS.get_or_init(random_colors_init);
-
     let listener = TcpListener::bind("127.0.0.1:1337").await?;
     let clients = Arc::new(Mutex::new(Clients::new()));
 

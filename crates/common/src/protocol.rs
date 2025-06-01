@@ -8,9 +8,6 @@ pub type Token = String;
 pub enum ClientMessage {
     /// An auth request with a user's display name and its color.
     Auth(MessageSender),
-    /// The `name` and `color` are provided automatically
-    /// by the server.
-    SimpleAuth,
     /// Token provided by [ServerMessage::AuthSuccess] and message text.
     /// Does not imply that the message will *actually* be sent.
     /// The client should only rely on [ServerMessage::PropagateMessage].
