@@ -27,8 +27,13 @@ pub enum Mode {
 pub struct Chat<'a> {
     mode: Mode,
     token: Option<protocol::Token>,
-    current_input: tui_input::Input,
+
     received_messages: Vec<Line<'a>>,
+    /// If `None`, snap to the bottom. Otherwise, fixed scroll towards the top.
+    chat_scroll_neg: Option<usize>,
+    current_input: tui_input::Input,
+    input_scroll: usize,
+
     ws_tx: UnboundedSender<Message>,
     event_tx: UnboundedSender<AppEvent>,
 }
@@ -38,8 +43,10 @@ impl Chat<'_> {
         Box::new(Self {
             mode: Mode::default(),
             token: None,
-            current_input: tui_input::Input::new(String::new()),
             received_messages: vec![],
+            chat_scroll_neg: None,
+            current_input: tui_input::Input::default(),
+            input_scroll: 0,
             ws_tx,
             event_tx,
         })
@@ -48,8 +55,18 @@ impl Chat<'_> {
     async fn handle_key_event(&mut self, event: KeyEvent) -> Result<bool> {
         Ok(match self.mode {
             Mode::Normal => match event.code {
-                event::KeyCode::Char('i') | event::KeyCode::Char('a') => {
+                event::KeyCode::Char('i' | 'a') => {
                     self.mode = Mode::Insert;
+                    true
+                }
+                event::KeyCode::Char('j') => {
+                    self.chat_scroll_neg =
+                        Some(self.chat_scroll_neg.unwrap_or(0).saturating_sub(1));
+                    true
+                }
+                event::KeyCode::Char('k') => {
+                    self.chat_scroll_neg =
+                        Some(self.chat_scroll_neg.unwrap_or(0).saturating_add(1));
                     true
                 }
                 _ => false,
@@ -131,6 +148,8 @@ impl Component for Chat<'_> {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _is_focused: bool) {
+        // TODO: Refactor this. Possibly split two areas into standalone widgets.
+
         let layout = Layout::vertical([Constraint::Fill(1), Constraint::Max(5)]);
         let [chat_area, input_area] = layout.areas(area);
 
@@ -147,14 +166,26 @@ impl Component for Chat<'_> {
                     .into_centered_line(),
             );
         }
-        Paragraph::new(self.received_messages.clone())
-            .block(chat_block)
-            .scroll((
-                0,
-                self.current_input.visual_scroll(input_area.width as usize) as u16,
-            ))
-            .wrap(ratatui::widgets::Wrap { trim: true })
-            .render(chat_area, frame.buffer_mut());
+        let mut chat_paragraph = Paragraph::new(self.received_messages.clone())
+            .block(chat_block.clone())
+            .wrap(ratatui::widgets::Wrap { trim: false });
+        let view_height = chat_area.height.saturating_sub(2) as usize;
+        let line_count = chat_paragraph.line_count(chat_area.width).saturating_sub(2);
+        self.chat_scroll_neg = self
+            .chat_scroll_neg
+            .map(|scroll| scroll.min(line_count.saturating_sub(view_height)));
+
+        let mut chat_scroll = line_count.saturating_sub(view_height);
+        chat_scroll = chat_scroll.saturating_sub(self.chat_scroll_neg.unwrap_or(0));
+        if let Some(0) = self.chat_scroll_neg {
+            self.chat_scroll_neg = None;
+        }
+
+        if self.chat_scroll_neg.is_none() && line_count - chat_scroll > view_height {
+            chat_scroll = line_count.saturating_add(chat_area.height as usize);
+        }
+        chat_paragraph = chat_paragraph.scroll((chat_scroll as u16, 0));
+        chat_paragraph.render(chat_area, frame.buffer_mut());
 
         let input_block = Block::bordered()
             .border_type(ratatui::widgets::BorderType::Rounded)
@@ -164,14 +195,35 @@ impl Component for Chat<'_> {
                 Span::raw(" <ESC>").bold().green() + Span::raw(" to exit INSERT mode ")
             })
             .title_alignment(ratatui::layout::Alignment::Right);
-        Paragraph::new(self.current_input.value())
+        let input_paragraph = Paragraph::new(self.current_input.value())
             .block(if self.mode == Mode::Insert {
                 input_block.blue()
             } else {
                 input_block
             })
             .wrap(ratatui::widgets::Wrap { trim: false })
-            .render(input_area, frame.buffer_mut());
+            .scroll((self.input_scroll as u16, 0));
+        input_paragraph.render(input_area, frame.buffer_mut());
+
+        if self.mode == Mode::Insert {
+            let width = input_area.width as usize - 2;
+            let height = input_area.height as usize - 2;
+            let cursor_absolute = self.current_input.visual_cursor();
+            let (cursor_x, mut cursor_y) = (
+                cursor_absolute % width,
+                cursor_absolute.checked_div(width).unwrap_or(0),
+            );
+            if cursor_y > (height - 1) {
+                self.input_scroll = cursor_y - (height - 1);
+                cursor_y = height - 1;
+            } else {
+                self.input_scroll = 0;
+            }
+            frame.set_cursor_position((
+                cursor_x as u16 + input_area.x + 1,
+                cursor_y as u16 + input_area.y + 1,
+            ));
+        }
     }
 
     async fn handle_event(&mut self, event: AppEvent, is_focused: bool) -> Result<bool> {
