@@ -39,7 +39,7 @@ pub enum AuthError {
 
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ServerNotification {
-    /// Literal message from server.
+    /// Literal message from the server.
     Literal(String),
     /// A message about a new client being connected.
     ClientConnected(MessageSender),

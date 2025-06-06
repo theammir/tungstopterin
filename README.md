@@ -14,6 +14,7 @@ Bundled with a homegrown WebSocket protocol implementaion.
 
 - [x] WebSocket protocol implementation
 - [ ] Verifiable RFC 6455 compliancy (via autobahn)
+- [ ] TLS encryption
 - [x] Concurrent client-server communication
 - [x] Extensible component-based client architecture
 - [ ] Some kind of integration testing
@@ -23,6 +24,7 @@ Bundled with a homegrown WebSocket protocol implementaion.
 - [x] Basic authentication with no server-side credentials storage
 - [x] Client customization (nickname & color)
 - [x] Pop-ups and timed notification toasts
+- [ ] Configurability via CLI
 - [ ] Basic animations
 - [ ] Chat history saving
 - [ ] Markdown-like rich text formatting

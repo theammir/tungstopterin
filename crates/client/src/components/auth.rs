@@ -58,6 +58,83 @@ pub struct Auth {
     color_list: ColorList,
 }
 
+struct NicknameWidget<'a> {
+    input: &'a tui_input::Input,
+    focus: Focus,
+}
+
+impl<'a> Widget for NicknameWidget<'a> {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
+    where
+        Self: Sized,
+    {
+        let nickname_value = self.input.value();
+        let input_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .title_top(Span::raw(" Nickname ").into_left_aligned_line())
+            .title_top(
+                Span::styled(
+                    format!(
+                        " ({}/{}) ",
+                        nickname_value.len(),
+                        protocol::NICKNAME_MAX_LEN
+                    ),
+                    if nickname_value.len() > protocol::NICKNAME_MAX_LEN {
+                        Style::new().red()
+                    } else {
+                        Style::new().reset()
+                    },
+                )
+                .into_right_aligned_line(),
+            );
+        Paragraph::new(nickname_value)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(input_block.style(if self.focus == Focus::Input {
+                Style::new().magenta()
+            } else {
+                Style::new()
+            }))
+            .render(area, buf);
+    }
+}
+
+struct ColorWidget<'a> {
+    list: &'a mut ColorList,
+    focus: Focus,
+}
+
+impl<'a> Widget for ColorWidget<'a> {
+    fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
+    where
+        Self: Sized,
+    {
+        let color_items = self.list.items.iter().map(|&item| {
+            let color = item
+                .parse::<ratatui::style::Color>()
+                .unwrap_or(Color::Reset);
+            ListItem::from(Line::styled(String::from("◼ ") + item, color))
+        });
+
+        let color_block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .title_top(Span::raw(" Color ").into_left_aligned_line())
+            .title_bottom(
+                (Span::raw(" j↓  k↑").bold().green() + Span::raw(" to scroll ")).right_aligned(),
+            );
+
+        let color_list = List::new(color_items)
+            .block(color_block)
+            .style(if self.focus == Focus::Colors {
+                Style::new().magenta()
+            } else {
+                Style::new()
+            })
+            .highlight_symbol(">");
+
+        StatefulWidget::render(color_list, area, buf, &mut self.list.state);
+    }
+}
+
 impl Auth {
     pub fn new(ws_tx: UnboundedSender<Message>, event_tx: UnboundedSender<AppEvent>) -> Box<Self> {
         Box::new(Self {
@@ -126,67 +203,26 @@ impl Component for Auth {
         }
         let area = center_area(area, Constraint::Ratio(1, 3), Constraint::Ratio(2, 3));
         frame.render_widget(Clear, area);
-        let bordered = Block::bordered()
+        let outer_borders = Block::bordered()
             .border_type(BorderType::Rounded)
             .border_style(Style::default().magenta());
-        bordered.clone().render(area, frame.buffer_mut());
+        outer_borders.render(area, frame.buffer_mut());
 
         let [input_area, color_area] = Layout::vertical([Constraint::Max(3), Constraint::Fill(1)])
             .margin(1)
             .areas(area);
 
-        let nickname_value = self.nickname_input.value();
-        let input_block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .title_top(Span::raw(" Nickname ").into_left_aligned_line())
-            .title_top(
-                Span::styled(
-                    format!(
-                        " ({}/{}) ",
-                        nickname_value.len(),
-                        protocol::NICKNAME_MAX_LEN
-                    ),
-                    if nickname_value.len() > protocol::NICKNAME_MAX_LEN {
-                        Style::new().red()
-                    } else {
-                        Style::new().reset()
-                    },
-                )
-                .into_right_aligned_line(),
-            );
-        Paragraph::new(nickname_value)
-            .wrap(ratatui::widgets::Wrap { trim: false })
-            .block(input_block.style(if self.focus == Focus::Input {
-                Style::new().magenta()
-            } else {
-                Style::new()
-            }))
-            .render(input_area, frame.buffer_mut());
+        let nickname_widget = NicknameWidget {
+            input: &self.nickname_input,
+            focus: self.focus,
+        };
+        nickname_widget.render(input_area, frame.buffer_mut());
 
-        let color_items = self.color_list.items.iter().map(|&item| {
-            let color = item
-                .parse::<ratatui::style::Color>()
-                .unwrap_or(Color::Reset);
-            ListItem::from(Line::styled(String::from("◼ ") + item, color))
-        });
-
-        let color_block = Block::bordered()
-            .border_type(BorderType::Rounded)
-            .title_top(Span::raw(" Color ").into_left_aligned_line());
-        let color_list = List::new(color_items)
-            .block(color_block)
-            .style(if self.focus == Focus::Colors {
-                Style::new().magenta()
-            } else {
-                Style::new()
-            })
-            .highlight_symbol(">");
-        StatefulWidget::render(
-            color_list,
-            color_area,
-            frame.buffer_mut(),
-            &mut self.color_list.state,
-        );
+        let color_widget = ColorWidget {
+            list: &mut self.color_list,
+            focus: self.focus,
+        };
+        color_widget.render(color_area, frame.buffer_mut());
     }
 
     async fn handle_event(&mut self, event: AppEvent, is_focused: bool) -> Result<bool> {

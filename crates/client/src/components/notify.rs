@@ -35,6 +35,23 @@ impl Notification {
         self.notifications
             .retain(|notif| notif.timestamp + notif.duration >= now)
     }
+
+    fn get_toast_area(&self, paragraph: &Paragraph, area: Rect, y_offset: u16) -> (Rect, u16) {
+        let inner_width =
+            (area.width.saturating_sub(2)).min(paragraph.line_width().saturating_sub(2) as u16);
+        let [_, inner_area_h] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(inner_width)]).areas(area);
+
+        // FIX: It doesn't work properly with manual linebreaks.
+        // And, according to ratatui #293, with a lot of other things.
+        let height = paragraph.line_count(inner_width) as u16;
+
+        let [_, toast_area] =
+            Layout::vertical([Constraint::Length(y_offset), Constraint::Length(height)])
+                .areas(inner_area_h);
+
+        (toast_area, height)
+    }
 }
 
 #[async_trait::async_trait]
@@ -54,27 +71,16 @@ impl Component for Notification {
 
         let mut offset_height: u16 = 0;
         for notif in &self.notifications {
-            let inner_width = (notification_area.width - 2)
-                .min(notif.text.lines().map(|line| line.len()).max().unwrap_or(0) as u16);
-            let [_, inner_area_h] =
-                Layout::horizontal([Constraint::Fill(1), Constraint::Length(inner_width)])
-                    .areas(notification_area);
             let paragraph = Paragraph::new(notif.text.lines().map(Line::from).collect::<Vec<_>>())
                 .wrap(ratatui::widgets::Wrap { trim: false })
                 .block(notification_block.clone());
+            let (toast_area, height) =
+                self.get_toast_area(&paragraph, notification_area, offset_height);
 
-            // FIX: It doesn't work properly with manual linebreaks.
-            // And, according to ratatui #293, with a lot of other things.
-            let height = paragraph.line_count(inner_width) as u16;
-            let [_, inner_area] = Layout::vertical([
-                Constraint::Length(offset_height),
-                Constraint::Length(height),
-            ])
-            .areas(inner_area_h);
+            frame.render_widget(Clear, toast_area);
+            paragraph.render(toast_area, frame.buffer_mut());
+
             offset_height = offset_height.saturating_add(height);
-
-            frame.render_widget(Clear, inner_area);
-            paragraph.render(inner_area, frame.buffer_mut());
         }
     }
 
