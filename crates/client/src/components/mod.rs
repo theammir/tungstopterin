@@ -4,4 +4,4 @@ mod notify;
 
 pub use auth::Auth;
 pub use chat::Chat;
-pub use notify::Notification;
+pub use notify::*;

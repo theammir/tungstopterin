@@ -7,7 +7,6 @@ use ratatui::{
     crossterm::event::{self, KeyEvent},
     layout::{Constraint, Layout, Rect},
     style::{Style, Stylize},
-    symbols::line,
     text::{Line, Span},
     widgets::{Block, Paragraph, Widget},
 };
@@ -15,7 +14,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tui_input::backend::crossterm::EventHandler;
 use websocket::message::Message;
 
-use crate::{AppEvent, component::Component, into_ratatui_color};
+use crate::{AppEvent, EventSender, component::Component, components::Urgency, into_ratatui_color};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -36,7 +35,7 @@ pub struct Chat<'a> {
     input_scroll: usize,
 
     ws_tx: UnboundedSender<Message>,
-    event_tx: UnboundedSender<AppEvent>,
+    event_tx: EventSender,
 }
 
 struct ChatWidget<'a> {
@@ -143,7 +142,7 @@ impl<'a> Widget for InputWidget<'a> {
 }
 
 impl Chat<'_> {
-    pub fn new(ws_tx: UnboundedSender<Message>, event_tx: UnboundedSender<AppEvent>) -> Box<Self> {
+    pub fn new(ws_tx: UnboundedSender<Message>, event_tx: EventSender) -> Box<Self> {
         Box::new(Self {
             mode: Mode::default(),
             token: None,
@@ -196,7 +195,7 @@ impl Chat<'_> {
         if let Ok(server_msg) = protocol::ServerMessage::try_from(&message) {
             match server_msg {
                 protocol::ServerMessage::AuthSuccess(Err(e)) => {
-                    self.event_tx.send(AppEvent::Notify(
+                    self.event_tx.notify(
                         match e {
                             protocol::AuthError::NicknameUnavailable => {
                                 "This nickname is unavailable. Try again."
@@ -205,10 +204,10 @@ impl Chat<'_> {
                                 "This nickname is too long. Try again."
                             }
                             protocol::AuthError::AlreadyAuthorized => "You are already authorized.",
-                        }
-                        .to_string(),
+                        },
+                        Urgency::Warning,
                         Duration::from_secs(3),
-                    ))?;
+                    )?;
                     self.event_tx.send(AppEvent::SpawnAuth)?;
                 }
                 protocol::ServerMessage::AuthSuccess(Ok(token)) => {
@@ -225,10 +224,11 @@ impl Chat<'_> {
                 }
                 protocol::ServerMessage::Notification(notif) => match notif {
                     protocol::ServerNotification::Literal(text) => {
-                        self.event_tx.send(AppEvent::Notify(
+                        self.event_tx.notify(
                             String::from("Server: ") + &text,
+                            Urgency::Info,
                             Duration::from_secs(5),
-                        ))?;
+                        )?;
                     }
                     protocol::ServerNotification::ClientConnected(sender) => {
                         self.received_messages.push(

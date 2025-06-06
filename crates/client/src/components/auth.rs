@@ -14,7 +14,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use tui_input::backend::crossterm::EventHandler;
 use websocket::message::Message;
 
-use crate::{AppEvent, component::Component, into_protocol_color};
+use crate::{AppEvent, EventSender, component::Component, into_protocol_color};
 
 #[derive(Debug)]
 struct ColorList {
@@ -50,7 +50,7 @@ impl Focus {
 #[derive(Debug)]
 pub struct Auth {
     ws_tx: UnboundedSender<Message>,
-    event_tx: UnboundedSender<AppEvent>,
+    event_tx: EventSender,
 
     focus: Focus,
 
@@ -136,7 +136,7 @@ impl<'a> Widget for ColorWidget<'a> {
 }
 
 impl Auth {
-    pub fn new(ws_tx: UnboundedSender<Message>, event_tx: UnboundedSender<AppEvent>) -> Box<Self> {
+    pub fn new(ws_tx: UnboundedSender<Message>, event_tx: EventSender) -> Box<Self> {
         Box::new(Self {
             ws_tx,
             event_tx,

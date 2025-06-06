@@ -13,13 +13,15 @@ use ratatui::{
 };
 use tokio::{
     net::TcpStream,
-    sync::mpsc::{UnboundedReceiver, UnboundedSender},
+    sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError},
 };
 use tokio_util::sync::CancellationToken;
 use websocket::{
     Server, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream, handshake::IntoWebsocket,
     message::Message,
 };
+
+use crate::components::Urgency;
 
 fn into_ratatui_color(color: protocol::Color) -> ratatui::style::Color {
     match color {
@@ -68,8 +70,31 @@ pub enum AppEvent {
     SpawnAuth,
 
     /// Spawn a notification for a period of time.
-    // TODO: Color coding depending on urgency.
-    Notify(String, Duration),
+    Notify(Text<'static>, Urgency, Duration),
+}
+
+#[derive(Debug, Clone)]
+pub struct EventSender(pub UnboundedSender<AppEvent>);
+impl EventSender {
+    pub fn send(&self, message: AppEvent) -> Result<(), SendError<AppEvent>> {
+        self.0.send(message)
+    }
+
+    pub fn notify<'a>(
+        &mut self,
+        text: impl Into<Text<'a>>,
+        urgency: Urgency,
+        duration: Duration,
+    ) -> Result<(), SendError<AppEvent>> {
+        let text: Text<'a> = text.into();
+        let owned_text: Text<'static> = Text::from_iter(text.lines.into_iter().map(|line| {
+            Line::from_iter(line.spans.into_iter().map(|span| {
+                let new_span: Span<'static> = Span::styled(span.content.into_owned(), span.style);
+                new_span
+            }))
+        }));
+        self.0.send(AppEvent::Notify(owned_text, urgency, duration))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -99,7 +124,7 @@ struct App {
     components: ComponentStack,
 
     event_rx: UnboundedReceiver<AppEvent>,
-    event_tx: UnboundedSender<AppEvent>,
+    event_tx: EventSender,
     // TODO: Bounded sender here?
     ws_tx: UnboundedSender<Message>,
 
@@ -115,7 +140,7 @@ impl App {
         let app = App {
             should_quit: false,
             components: ComponentStack::default(),
-            event_tx,
+            event_tx: EventSender(event_tx),
             event_rx,
             ws_tx,
             cancel_token: app_cancel,
