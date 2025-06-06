@@ -3,6 +3,8 @@ use websocket::message::Message;
 
 pub type Token = String;
 
+pub const NICKNAME_MAX_LEN: usize = 16;
+
 #[non_exhaustive]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -12,6 +14,37 @@ pub enum ClientMessage {
     /// Does not imply that the message will *actually* be sent.
     /// The client should only rely on [ServerMessage::PropagateMessage].
     SendMessage { token: Token, text: String },
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+pub enum ServerMessage {
+    /// Whether the server accepts [ClientMessage::Auth].
+    AuthSuccess(Result<Token, AuthError>),
+    /// A chat message from either this client or any other.
+    PropagateMessage(MessageSender, String),
+    /// Any kind of notification issued by the server.
+    Notification(ServerNotification),
+}
+
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+pub enum AuthError {
+    /// Nickname already used or otherwise unavailable.
+    NicknameUnavailable,
+    /// Nickname length exceeds the predefined maximum length.
+    NicknameTooLong,
+    /// The user sending [ClientMessage::Auth] is already authenticated.
+    AlreadyAuthorized,
+}
+
+#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
+pub enum ServerNotification {
+    /// Literal message from server.
+    Literal(String),
+    /// A message about a new client being connected.
+    ClientConnected(MessageSender),
+    /// A message about a client being disconnected.
+    ClientDisconnected(MessageSender),
 }
 
 impl From<ClientMessage> for Message {
@@ -32,24 +65,6 @@ impl TryFrom<&Message> for ClientMessage {
             _ => Err(()),
         }
     }
-}
-
-#[non_exhaustive]
-#[derive(Debug, Clone, Hash, Serialize, Deserialize)]
-pub enum ServerMessage {
-    /// Whether the server accepts [ClientMessage::Auth].
-    // TODO: Provide specific errors (invalid nickname, already occupied)
-    AuthSuccess(Option<Token>),
-    /// A chat message from either this client or any other.
-    PropagateMessage(MessageSender, String),
-    /// A message from server.
-    ServerNotification(String),
-    // TODO: Utilize these
-    //
-    /// A message about a new client being connected.
-    ClientConnected(MessageSender),
-    /// A message about a client being disconnected.
-    ClientDisconnected(MessageSender),
 }
 
 impl From<ServerMessage> for Message {

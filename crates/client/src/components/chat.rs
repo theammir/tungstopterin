@@ -91,14 +91,23 @@ impl Chat<'_> {
     async fn handle_ws_message(&mut self, message: Message) -> Result<bool> {
         if let Ok(server_msg) = protocol::ServerMessage::try_from(&message) {
             match server_msg {
-                protocol::ServerMessage::AuthSuccess(None) => {
+                protocol::ServerMessage::AuthSuccess(Err(e)) => {
                     self.event_tx.send(AppEvent::Notify(
-                        String::from("Auth unsuccessful, please try again."),
+                        match e {
+                            protocol::AuthError::NicknameUnavailable => {
+                                "This nickname is unavailable. Try again."
+                            }
+                            protocol::AuthError::NicknameTooLong => {
+                                "This nickname is too long. Try again."
+                            }
+                            protocol::AuthError::AlreadyAuthorized => "You are already authorized.",
+                        }
+                        .to_string(),
                         Duration::from_secs(3),
                     ))?;
                     self.event_tx.send(AppEvent::SpawnAuth)?;
                 }
-                protocol::ServerMessage::AuthSuccess(Some(token)) => {
+                protocol::ServerMessage::AuthSuccess(Ok(token)) => {
                     self.token = Some(token);
                 }
                 protocol::ServerMessage::PropagateMessage(sender, text) => {
@@ -110,10 +119,26 @@ impl Chat<'_> {
                             + Span::raw(text),
                     );
                 }
-                protocol::ServerMessage::ServerNotification(text) => {
-                    self.received_messages
-                        .push(Span::styled(text, Style::new().gray().italic()).into());
-                }
+                protocol::ServerMessage::Notification(notif) => match notif {
+                    protocol::ServerNotification::Literal(text) => {
+                        self.event_tx.send(AppEvent::Notify(
+                            String::from("Server: ") + &text,
+                            Duration::from_secs(5),
+                        ))?;
+                    }
+                    protocol::ServerNotification::ClientConnected(sender) => {
+                        self.received_messages.push(
+                            Span::styled(sender.name, into_ratatui_color(sender.color))
+                                + Span::raw(" has connected.").gray().italic(),
+                        );
+                    }
+                    protocol::ServerNotification::ClientDisconnected(sender) => {
+                        self.received_messages.push(
+                            Span::styled(sender.name, into_ratatui_color(sender.color))
+                                + Span::raw(" has disconnected.").gray().italic(),
+                        );
+                    }
+                },
                 _ => {}
             }
         } else {

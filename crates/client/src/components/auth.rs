@@ -135,10 +135,26 @@ impl Component for Auth {
             .margin(1)
             .areas(area);
 
+        let nickname_value = self.nickname_input.value();
         let input_block = Block::bordered()
             .border_type(BorderType::Rounded)
-            .title_top(Span::raw(" Nickname ").into_left_aligned_line());
-        Paragraph::new(self.nickname_input.value())
+            .title_top(Span::raw(" Nickname ").into_left_aligned_line())
+            .title_top(
+                Span::styled(
+                    format!(
+                        " ({}/{}) ",
+                        nickname_value.len(),
+                        protocol::NICKNAME_MAX_LEN
+                    ),
+                    if nickname_value.len() > protocol::NICKNAME_MAX_LEN {
+                        Style::new().red()
+                    } else {
+                        Style::new().reset()
+                    },
+                )
+                .into_right_aligned_line(),
+            );
+        Paragraph::new(nickname_value)
             .wrap(ratatui::widgets::Wrap { trim: false })
             .block(input_block.style(if self.focus == Focus::Input {
                 Style::new().magenta()

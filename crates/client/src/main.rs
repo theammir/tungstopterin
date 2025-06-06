@@ -258,6 +258,8 @@ async fn main() -> Result<()> {
     let mut app = App::new(ws_rx, ws_tx);
     app.run(&mut terminal).await?;
 
+    // TODO: Start closing handshake
+
     ratatui::restore();
     app.cancel_token.cancel();
     Ok(())

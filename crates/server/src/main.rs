@@ -79,12 +79,16 @@ impl Clients {
         &mut self,
         address: SocketAddr,
         client: ClientData,
-    ) -> Result<protocol::Token, ClientData> {
+    ) -> Result<protocol::Token, (protocol::AuthError, ClientData)> {
         if self.addr_map.values().any(|c| *c.name == client.name) {
-            return Err(client);
+            return Err((protocol::AuthError::NicknameUnavailable, client));
         }
+        if client.name.len() > protocol::NICKNAME_MAX_LEN {
+            return Err((protocol::AuthError::NicknameTooLong, client));
+        }
+
         if let Some(client) = self.addr_map.insert(address, client) {
-            Err(client)
+            Err((protocol::AuthError::AlreadyAuthorized, client))
         } else {
             let token = self.generate_token(address);
             self.token_map.insert(token.clone(), address);
@@ -134,14 +138,16 @@ impl Clients {
 
 async fn on_disconnect(address: SocketAddr, clients: Arc<Mutex<Clients>>) {
     let mut lock = clients.lock().await;
-    let client_name = lock.by_addr(address).map(|client| client.name.clone());
-    if let Some(name) = client_name {
-        println!("{name} ({address}) has disconnected.");
+    let maybe_sender = lock.by_addr(address).map(protocol::MessageSender::from);
+    if let Some(sender) = maybe_sender {
+        println!("{} ({address}) has disconnected.", sender.name);
         _ = lock
             .broadcast_except_one(
                 address,
-                protocol::ServerMessage::ServerNotification(format!("{name} has disconnected.",))
-                    .into(),
+                protocol::ServerMessage::Notification(
+                    protocol::ServerNotification::ClientDisconnected(sender),
+                )
+                .into(),
             )
             .await;
         lock.disconnect(address).await;
@@ -200,11 +206,10 @@ async fn handle_auth(
     };
 
     let new_sender: protocol::MessageSender;
-    let maybe_token: Result<protocol::Token, ClientData>;
-    match client_msg.unwrap() {
+    let maybe_token = match client_msg.unwrap() {
         protocol::ClientMessage::Auth(sender) => {
             new_sender = sender;
-            maybe_token = clients
+            clients
                 .lock()
                 .await
                 .try_connect(
@@ -215,22 +220,22 @@ async fn handle_auth(
                         color: new_sender.color,
                     },
                 )
-                .await;
+                .await
         }
         _ => return Ok(Some(tx)),
-    }
+    };
 
     let mut lock = clients.lock().await;
 
-    if let Err(client_data) = maybe_token {
+    if let Err((err, client_data)) = maybe_token {
         let mut tx = client_data.tx;
-        tx.send(protocol::ServerMessage::AuthSuccess(None).into())
+        tx.send(protocol::ServerMessage::AuthSuccess(Err(err)).into())
             .await?;
         return Ok(Some(tx));
     } else {
         lock.send_to_addr(
             addr,
-            protocol::ServerMessage::AuthSuccess(maybe_token.ok()).into(),
+            protocol::ServerMessage::AuthSuccess(maybe_token.map_err(|(err, _)| err)).into(),
         )
         .await?;
     }
@@ -238,8 +243,10 @@ async fn handle_auth(
     println!("{} ({addr}) has connected.", new_sender.name);
     lock.broadcast_except_one(
         addr,
-        protocol::ServerMessage::ServerNotification(format!("{} has connected.", new_sender.name))
-            .into(),
+        protocol::ServerMessage::Notification(protocol::ServerNotification::ClientConnected(
+            new_sender,
+        ))
+        .into(),
     )
     .await?;
 
