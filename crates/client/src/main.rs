@@ -1,3 +1,4 @@
+#![warn(clippy::pedantic)]
 use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use color_eyre::eyre::Result;
@@ -34,6 +35,7 @@ use crate::components::Urgency;
 type TlsStream = tokio_rustls::client::TlsStream<TcpStream>;
 
 fn into_ratatui_color(color: protocol::Color) -> ratatui::style::Color {
+    #[allow(clippy::match_same_arms)]
     match color {
         protocol::Color::Text => Color::Reset,
         protocol::Color::Truecolor(r, g, b) => Color::Rgb(r, g, b),
@@ -48,6 +50,7 @@ fn into_ratatui_color(color: protocol::Color) -> ratatui::style::Color {
 }
 
 fn into_protocol_color(color: Color) -> protocol::Color {
+    #[allow(clippy::match_same_arms)]
     match color {
         Color::Reset => protocol::Color::Text,
         Color::White => protocol::Color::Text,
@@ -68,7 +71,7 @@ pub mod components;
 pub enum AppEvent {
     /// Incoming server WebSocket message.
     WsMessage(Message),
-    /// Incoming terminal KeyEvent.
+    /// Incoming terminal [`KeyEvent`][`crossterm::event::KeyEvent`].
     KeyEvent(crossterm::event::KeyEvent),
 
     /// Pop from the stack, *destroying a component*, and move focus one position down.
@@ -76,7 +79,7 @@ pub enum AppEvent {
     /// Move component focus one position up the stack, if possible.
     ComponentFocus,
 
-    /// Spawn [components::Auth] pop-up.
+    /// Spawn [`components::Auth`] pop-up.
     SpawnAuth,
 
     /// Spawn a notification for a period of time.
@@ -86,10 +89,20 @@ pub enum AppEvent {
 #[derive(Debug, Clone)]
 pub struct EventSender(pub UnboundedSender<AppEvent>);
 impl EventSender {
+    /// Attempts to send an app event.
+    ///
+    /// # Errors
+    ///
+    /// See [`UnboundedSender::send`]
     pub fn send(&self, message: AppEvent) -> Result<(), SendError<AppEvent>> {
         self.0.send(message)
     }
 
+    /// Attempts to send a notification with rich formatting.
+    ///
+    /// # Errors
+    ///
+    /// See [`UnboundedSender::send`]
     pub fn notify<'a>(
         &mut self,
         text: impl Into<Text<'a>>,
@@ -97,12 +110,20 @@ impl EventSender {
         duration: Duration,
     ) -> Result<(), SendError<AppEvent>> {
         let text: Text<'a> = text.into();
-        let owned_text: Text<'static> = Text::from_iter(text.lines.into_iter().map(|line| {
-            Line::from_iter(line.spans.into_iter().map(|span| {
-                let new_span: Span<'static> = Span::styled(span.content.into_owned(), span.style);
-                new_span
-            }))
-        }));
+        let owned_text: Text<'static> = text
+            .lines
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|span| {
+                        let new_span: Span<'static> =
+                            Span::styled(span.content.into_owned(), span.style);
+                        new_span
+                    })
+                    .collect::<Line<'static>>()
+            })
+            .collect();
         self.0.send(AppEvent::Notify(owned_text, urgency, duration))
     }
 }
@@ -206,7 +227,7 @@ impl App {
         ));
         self.components.push_back(components::Notification::new());
 
-        for component in self.components.inner.iter_mut() {
+        for component in &mut self.components.inner {
             component.init().await?;
         }
         Ok(())

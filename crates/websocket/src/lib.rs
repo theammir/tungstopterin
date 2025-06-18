@@ -1,3 +1,5 @@
+#![warn(clippy::pedantic)]
+
 pub mod frame;
 pub mod handshake;
 pub mod message;
@@ -28,7 +30,7 @@ where
     loop {
         let n = reader.read_line(&mut buf).await?;
         if n == 0 {
-            Err(ErrorKind::UnexpectedEof)?
+            Err(ErrorKind::UnexpectedEof)?;
         }
         if &buf[buf.len() - 4..] == "\r\n\r\n" {
             break;
@@ -54,12 +56,12 @@ where
     let payload_len = match header.payload_len {
         PayloadLen::ExactU8(n) => {
             payload_len_bytes = 0;
-            n as u64
+            n.into()
         }
         PayloadLen::HintU16 => {
             payload_len_bytes = 2;
             stream.read_exact(&mut payload_buf[..2]).await?;
-            u16::from_be_bytes(payload_buf[..2].try_into().unwrap()) as u64
+            u16::from_be_bytes(payload_buf[..2].try_into().unwrap()).into()
         }
         PayloadLen::HintU64 => {
             payload_len_bytes = 8;
@@ -70,6 +72,7 @@ where
     };
 
     let frame_len: usize = 2 + payload_len_bytes + if header.masked { 4 } else { 0 };
+    #[allow(clippy::cast_possible_truncation)]
     let mut frame_vec = vec![0u8; frame_len + payload_len as usize];
 
     let mut masked_key_buf = payload_buf;
@@ -106,6 +109,7 @@ impl<S: Side, T: UnpinStream> WsStream<S, T> {
         }
     }
 
+    #[must_use]
     pub fn into_split(self) -> (WsRecvHalf<S, T>, WsSendHalf<S, T>) {
         (self.rx, self.tx)
     }

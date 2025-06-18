@@ -10,16 +10,16 @@ pub const NICKNAME_MAX_LEN: usize = 16;
 pub enum ClientMessage {
     /// An auth request with a user's display name and its color.
     Auth(MessageSender),
-    /// Token provided by [ServerMessage::AuthSuccess] and message text.
+    /// Token provided by [`ServerMessage::AuthSuccess`] and message text.
     /// Does not imply that the message will *actually* be sent.
-    /// The client should only rely on [ServerMessage::PropagateMessage].
+    /// The client should only rely on [`ServerMessage::PropagateMessage`].
     SendMessage { token: Token, text: String },
 }
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Hash, Serialize, Deserialize)]
 pub enum ServerMessage {
-    /// Whether the server accepts [ClientMessage::Auth].
+    /// Whether the server accepts [`ClientMessage::Auth`].
     AuthSuccess(Result<Token, AuthError>),
     /// A chat message from either this client or any other.
     PropagateMessage(MessageSender, String),
@@ -33,7 +33,7 @@ pub enum AuthError {
     NicknameUnavailable,
     /// Nickname length exceeds the predefined maximum length.
     NicknameTooLong,
-    /// The user sending [ClientMessage::Auth] is already authenticated.
+    /// The user sending [`ClientMessage::Auth`] is already authenticated.
     AlreadyAuthorized,
 }
 

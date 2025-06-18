@@ -22,7 +22,7 @@ fn generate_sec_key() -> String {
 fn generate_response_key(key: String) -> String {
     let mut hasher = Sha1::new();
     hasher.update(key + SEC_WS_MAGIC);
-    let result: Vec<u8> = hasher.finalize().iter().cloned().collect();
+    let result: Vec<u8> = hasher.finalize().iter().copied().collect();
     STANDARD.encode(result)
 }
 
@@ -67,9 +67,8 @@ GET / HTTP/1.1\r
 Host: {host}\r
 Upgrade: websocket\r
 Connection: upgrade\r
-Sec-Websocket-Key: {key}\r
+Sec-Websocket-Key: {sec_key}\r
 Sec-Websocket-Version: 13\r\n\r\n",
-                key = sec_key
             )
             .as_bytes(),
         )
@@ -95,8 +94,8 @@ Sec-Websocket-Version: 13\r\n\r\n",
 
 impl<T: UnpinStream> IntoWebsocket for WsStream<Client, T> {
     async fn try_upgrade(&mut self, expected_host: &str) -> std::io::Result<()> {
-        let request = String::from_utf8(self.read_http_bytes().await?.to_vec())
-            .map_err(|_| ErrorKind::InvalidData)?;
+        let request =
+            String::from_utf8(self.read_http_bytes().await?).map_err(|_| ErrorKind::InvalidData)?;
 
         let sec_key = validate_upgrade_headers(&request, expected_host)
             .ok_or(ErrorKind::ConnectionRefused)?;

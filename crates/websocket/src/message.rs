@@ -23,6 +23,7 @@ impl From<u16> for StatusCode {
             1000 => Self::Normal,
             1001 => Self::GoingAway,
             1002 => Self::ProtocolError,
+            #[allow(clippy::match_same_arms)]
             1003 => Self::UnsupportedData,
 
             1005 => Self::NoStatus,
@@ -166,11 +167,7 @@ impl From<Message> for Frame {
                 }
                 vector
             }
-            Message::Ping(mut binary) => {
-                binary.truncate(125);
-                binary
-            }
-            Message::Pong(mut binary) => {
+            Message::Ping(mut binary) | Message::Pong(mut binary) => {
                 binary.truncate(125);
                 binary
             }

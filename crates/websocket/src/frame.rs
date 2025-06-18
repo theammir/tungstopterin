@@ -51,6 +51,7 @@ impl From<u64> for PayloadLen {
         const U8_MAX: u64 = 125u64;
         const U16_MAX: u64 = u16::MAX as u64;
         const U64_MAX: u64 = u64::MAX;
+        #[allow(clippy::cast_possible_truncation)]
         #[allow(clippy::match_overlapping_arm)] // idk it's kinda readable
         // in case it's not, the smallest possible variant is prioritized
         match value {
@@ -62,7 +63,7 @@ impl From<u64> for PayloadLen {
 }
 
 /// [Frame] header that can be parsed from the first 2 bytes of it.
-/// If the length is 126 or 127, respective [PayloadLen] hint will be assigned.
+/// If the length is 126 or 127, respective [`PayloadLen`] hint will be assigned.
 /// Enough bytes in the slice will convert to instance with exact length of the smallest possible
 /// unsigned int size.
 #[derive(Debug, Clone, Copy)]
@@ -78,7 +79,7 @@ pub struct FrameHeader {
     pub payload_len: PayloadLen,
 }
 
-/// WebSocket Frame consisting of a [FrameHeader], a payload, and an optional masking key.
+/// WebSocket Frame consisting of a [`FrameHeader`], a payload, and an optional masking key.
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub header: FrameHeader,
@@ -87,9 +88,10 @@ pub struct Frame {
 }
 
 impl FrameHeader {
-    /// Creates a new [FrameHeader] with an initialized masking key.
+    /// Creates a new [`FrameHeader`] with an initialized masking key.
     /// No actual masking is done, and is the responsibility of the caller,
-    /// see [Frame::mask].
+    /// see [`Frame::mask`].
+    #[must_use]
     pub fn new(fin: bool, opcode: Opcode, masked: bool, payload_len: u64) -> Self {
         FrameHeader {
             fin,
@@ -104,7 +106,8 @@ impl FrameHeader {
 impl Frame {
     /// Creates a new [Frame] with an initialized masking key.
     /// No actual masking is done, and is the responsibility of the caller,
-    /// see [Frame::mask].
+    /// see [`Frame::mask`].
+    #[must_use]
     pub fn new(fin: bool, opcode: Opcode, payload: Vec<u8>) -> Self {
         Frame {
             header: FrameHeader::new(fin, opcode, true, payload.len() as u64),
@@ -132,10 +135,10 @@ impl From<FrameHeader> for Vec<u8> {
         let mut result = Vec::with_capacity(2 + if value.masked { 4 } else { 0 });
 
         let first_bit =
-            ((value.fin as u8) << 7) | ((value.rsv & 0b00000111) << 4) | value.opcode as u8;
+            (u8::from(value.fin) << 7) | ((value.rsv & 0b0000_0111) << 4) | value.opcode as u8;
         result.push(first_bit);
 
-        let mut second_bit = (value.masked as u8) << 7;
+        let mut second_bit = u8::from(value.masked) << 7;
         match value.payload_len {
             PayloadLen::ExactU8(len) => {
                 second_bit |= len;
@@ -184,26 +187,24 @@ impl TryFrom<&[u8]> for FrameHeader {
         }
 
         let payload_len = {
-            let len_header = value[1] & 0b01111111;
+            let len_header = value[1] & 0b0111_1111;
             match len_header {
                 0..=125 => PayloadLen::ExactU8(len_header),
                 126 => {
                     const U16_LEN: usize = 2;
                     value
                         .get(2..2 + U16_LEN)
-                        .map(|slice| {
+                        .map_or(PayloadLen::HintU16, |slice| {
                             PayloadLen::ExactU16(u16::from_be_bytes(slice.try_into().unwrap()))
                         })
-                        .unwrap_or(PayloadLen::HintU16)
                 }
                 127 => {
                     const U64_LEN: usize = 8;
                     value
                         .get(2..2 + U64_LEN)
-                        .map(|slice| {
+                        .map_or(PayloadLen::HintU64, |slice| {
                             PayloadLen::ExactU64(u64::from_be_bytes(slice.try_into().unwrap()))
                         })
-                        .unwrap_or(PayloadLen::HintU64)
                 }
                 _ => unreachable!(),
             }
@@ -211,8 +212,8 @@ impl TryFrom<&[u8]> for FrameHeader {
 
         Ok(Self {
             fin: (value[0] >> 7) != 0,
-            rsv: (value[0] & 0b01110000) >> 4,
-            opcode: Opcode::try_from(value[0] & 0b00001111)
+            rsv: (value[0] & 0b0111_0000) >> 4,
+            opcode: Opcode::try_from(value[0] & 0b0000_1111)
                 .map_err(|_| FrameError::InvalidOpcode)?,
             masked: (value[1] >> 7) != 0,
             payload_len,
@@ -284,16 +285,16 @@ mod tests {
         };
         let bytes: Vec<u8> = unmasked_long.clone().into();
 
-        println!("Unmasked 64-bit length: {:?}", unmasked_long);
+        println!("Unmasked 64-bit length: {unmasked_long:?}");
         for byte in &bytes {
-            print!("{:08b} ", byte);
+            print!("{byte:08b} ");
         }
         println!("\n");
 
         assert_eq!(bytes[0] >> 7, 0, "incorrect FIN bit");
-        assert_eq!((bytes[0] & 0b01110000) >> 4, 0, "incorrect RSV bits");
+        assert_eq!((bytes[0] & 0b0111_0000) >> 4, 0, "incorrect RSV bits");
         assert_eq!(bytes[1] >> 7, 0, "incorrect masked bit");
-        assert_eq!(bytes[1] & 0b01111111, 127, "incorrect payload length");
+        assert_eq!(bytes[1] & 0b0111_1111, 127, "incorrect payload length");
     }
 
     #[test]
@@ -311,9 +312,9 @@ mod tests {
         };
         let bytes: Vec<u8> = masked_7bit.clone().into();
 
-        println!("Yet to be masked 7-bit length: {:?}", masked_7bit);
+        println!("Yet to be masked 7-bit length: {masked_7bit:?}");
         for byte in &bytes {
-            print!("{:08b} ", byte);
+            print!("{byte:08b} ");
         }
         println!();
 
@@ -323,16 +324,16 @@ mod tests {
         let bytes: Vec<u8> = masked_7bit.clone().into();
         println!("Masked:");
         for byte in &bytes {
-            print!("{:08b} ", byte);
+            print!("{byte:08b} ");
         }
         println!();
 
         assert_eq!(masked_7bit.payload[2], 0xcf, "invalid masked payload");
 
         assert_eq!(bytes[0] >> 7, 1, "incorrect FIN bit");
-        assert_eq!((bytes[0] & 0b01110000) >> 4, 3, "incorrect RSV bits");
+        assert_eq!((bytes[0] & 0b0111_0000) >> 4, 3, "incorrect RSV bits");
         assert_eq!(bytes[1] >> 7, 1, "incorrect masked bit");
-        assert_eq!(bytes[1] & 0b01111111, 3, "incorrect payload length");
+        assert_eq!(bytes[1] & 0b0111_1111, 3, "incorrect payload length");
     }
 
     #[test]
@@ -340,12 +341,12 @@ mod tests {
         let unmasked_long_bytes = vec![2_u8, 127, 0, 0, 0, 0, 0, 0, 0, 4, 222, 173, 190, 239];
         println!("Raw unmasked 64-bit length:");
         for byte in &unmasked_long_bytes {
-            print!("{:08b} ", byte);
+            print!("{byte:08b} ");
         }
         println!();
 
         let frame: Frame = unmasked_long_bytes.try_into().unwrap();
-        println!("Reconstructed: {:?}\n", frame);
+        println!("Reconstructed: {frame:?}\n");
 
         assert!(!frame.header.fin, "incorrect FIN bit");
         assert_eq!(frame.header.rsv, 0, "incorrect RSV bits");
@@ -362,7 +363,7 @@ mod tests {
         let masked_7bit_bytes = vec![176, 131, 0, 0, 48, 57, 255, 0, 207];
         println!("Raw masked 7-bit length:");
         for byte in &masked_7bit_bytes {
-            print!("{:08b} ", byte);
+            print!("{byte:08b} ");
         }
         println!();
 
@@ -372,7 +373,7 @@ mod tests {
         frame.mask();
         assert_eq!(frame.payload[2], 0xff, "invalid unmasked payload");
 
-        println!("Unmasked 7-bit: {:?}", frame);
+        println!("Unmasked 7-bit: {frame:?}");
 
         assert!(frame.header.fin, "incorrect FIN bit");
         assert_eq!(frame.header.rsv, 3, "incorrect RSV bits");

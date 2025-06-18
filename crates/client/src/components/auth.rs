@@ -63,7 +63,7 @@ struct NicknameWidget<'a> {
     focus: Focus,
 }
 
-impl<'a> Widget for NicknameWidget<'a> {
+impl Widget for NicknameWidget<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,
@@ -103,7 +103,7 @@ struct ColorWidget<'a> {
     focus: Focus,
 }
 
-impl<'a> Widget for ColorWidget<'a> {
+impl Widget for ColorWidget<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,
@@ -136,17 +136,18 @@ impl<'a> Widget for ColorWidget<'a> {
 }
 
 impl Auth {
+    #[must_use]
     pub fn new(ws_tx: UnboundedSender<Message>, event_tx: EventSender) -> Box<Self> {
         Box::new(Self {
             ws_tx,
             event_tx,
-            focus: Default::default(),
-            nickname_input: Default::default(),
-            color_list: Default::default(),
+            focus: Focus::default(),
+            nickname_input: tui_input::Input::default(),
+            color_list: ColorList::default(),
         })
     }
 
-    async fn try_authenticate(&mut self) -> Result<()> {
+    fn try_authenticate(&mut self) -> Result<()> {
         let selected = self.color_list.state.selected().unwrap();
         self.ws_tx.send(
             protocol::ClientMessage::Auth(protocol::MessageSender {
@@ -160,16 +161,15 @@ impl Auth {
         Ok(())
     }
 
-    async fn handle_input_event(&mut self, event: event::KeyEvent) -> Result<bool> {
-        Ok(self
-            .nickname_input
+    fn handle_input_event(&mut self, event: event::KeyEvent) -> bool {
+        self.nickname_input
             .handle_event(&event::Event::Key(event))
-            .is_some())
+            .is_some()
     }
 
-    async fn handle_colors_event(&mut self, event: event::KeyEvent) -> Result<bool> {
-        Ok(match event.code {
             event::KeyCode::Char('j' | 's') | event::KeyCode::Down => {
+    fn handle_colors_event(&mut self, event: event::KeyEvent) -> bool {
+        match event.code {
                 self.color_list.state.select_next();
                 true
             }
@@ -178,7 +178,7 @@ impl Auth {
                 true
             }
             _ => false,
-        })
+        }
     }
 }
 
@@ -231,8 +231,8 @@ impl Component for Auth {
         }
         if let AppEvent::KeyEvent(key_event) = event {
             if match self.focus {
-                Focus::Input => self.handle_input_event(key_event).await?,
-                Focus::Colors => self.handle_colors_event(key_event).await?,
+                Focus::Input => self.handle_input_event(key_event),
+                Focus::Colors => self.handle_colors_event(key_event),
             } {
                 return Ok(true);
             }
@@ -246,7 +246,7 @@ impl Component for Auth {
                     true
                 }
                 event::KeyCode::Enter => {
-                    self.try_authenticate().await?;
+                    self.try_authenticate()?;
                     self.event_tx.send(AppEvent::ComponentUnfocus)?;
                     true
                 }

@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation)]
 use std::time::Duration;
 
 use color_eyre::eyre::Result;
@@ -30,6 +31,7 @@ pub struct Chat<'a> {
 
     received_messages: Vec<Line<'a>>,
     /// If `None`, snap to the bottom. Otherwise, fixed scroll towards the top.
+    #[allow(clippy::struct_field_names)]
     chat_scroll_neg: Option<usize>,
     current_input: tui_input::Input,
     input_scroll: usize,
@@ -44,8 +46,8 @@ struct ChatWidget<'a> {
     authorized: bool,
 }
 
-impl<'a> ChatWidget<'a> {
-    fn clamp_scroll(&mut self, area: &Rect, text_height: usize) -> usize {
+impl ChatWidget<'_> {
+    fn clamp_scroll(&mut self, area: Rect, text_height: usize) -> usize {
         let view_height = area.height.saturating_sub(2) as usize;
 
         *self.scroll_neg = self
@@ -63,7 +65,7 @@ impl<'a> ChatWidget<'a> {
     }
 }
 
-impl<'a> Widget for ChatWidget<'a> {
+impl Widget for ChatWidget<'_> {
     fn render(mut self, area: Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,
@@ -86,7 +88,7 @@ impl<'a> Widget for ChatWidget<'a> {
             .block(chat_block.clone())
             .wrap(ratatui::widgets::Wrap { trim: false });
         let line_count = chat_paragraph.line_count(area.width).saturating_sub(2);
-        chat_paragraph = chat_paragraph.scroll((self.clamp_scroll(&area, line_count) as u16, 0));
+        chat_paragraph = chat_paragraph.scroll((self.clamp_scroll(area, line_count) as u16, 0));
         chat_paragraph.render(area, buf);
     }
 }
@@ -97,7 +99,7 @@ struct InputWidget<'a> {
     scroll: &'a mut usize,
 }
 
-impl<'a> InputWidget<'a> {
+impl InputWidget<'_> {
     fn cursor_position(&mut self, area: Rect) -> (u16, u16) {
         let width = area.width as usize - 2;
         let height = area.height as usize - 2;
@@ -116,7 +118,7 @@ impl<'a> InputWidget<'a> {
     }
 }
 
-impl<'a> Widget for InputWidget<'a> {
+impl Widget for InputWidget<'_> {
     fn render(self, area: Rect, buf: &mut ratatui::prelude::Buffer)
     where
         Self: Sized,
@@ -142,6 +144,7 @@ impl<'a> Widget for InputWidget<'a> {
 }
 
 impl Chat<'_> {
+    #[must_use]
     pub fn new(ws_tx: UnboundedSender<Message>, event_tx: EventSender) -> Box<Self> {
         Box::new(Self {
             mode: Mode::default(),
@@ -191,8 +194,8 @@ impl Chat<'_> {
         })
     }
 
-    async fn handle_ws_message(&mut self, message: Message) -> Result<bool> {
-        if let Ok(server_msg) = protocol::ServerMessage::try_from(&message) {
+    fn handle_ws_message(&mut self, message: &Message) -> Result<bool> {
+        if let Ok(server_msg) = protocol::ServerMessage::try_from(message) {
             match server_msg {
                 protocol::ServerMessage::AuthSuccess(Err(e)) => {
                     self.event_tx.notify(
@@ -303,7 +306,7 @@ impl Component for Chat<'_> {
     async fn handle_event(&mut self, event: AppEvent, is_focused: bool) -> Result<bool> {
         Ok(match event {
             AppEvent::KeyEvent(key_event) if is_focused => self.handle_key_event(key_event).await?,
-            AppEvent::WsMessage(msg) => self.handle_ws_message(msg).await?,
+            AppEvent::WsMessage(msg) => self.handle_ws_message(&msg)?,
             _ => false,
         })
     }

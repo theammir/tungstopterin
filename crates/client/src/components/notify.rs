@@ -1,3 +1,4 @@
+#![allow(clippy::cast_possible_truncation)]
 use std::time;
 
 use color_eyre::eyre::Result;
@@ -19,6 +20,7 @@ pub enum Urgency {
 }
 
 impl Urgency {
+    #[must_use]
     pub fn icon(&self) -> &'static str {
         match self {
             Urgency::Info => "",
@@ -27,6 +29,7 @@ impl Urgency {
         }
     }
 
+    #[must_use]
     pub fn style(&self) -> Style {
         match self {
             Urgency::Info => Style::new().cyan(),
@@ -49,7 +52,8 @@ pub struct Notification<'a> {
     notifications: Vec<TimedNotification<'a>>,
 }
 
-impl<'a> Notification<'a> {
+impl Notification<'_> {
+    #[must_use]
     pub fn new() -> Box<Self> {
         Box::new(Self {
             notifications: vec![],
@@ -59,10 +63,10 @@ impl<'a> Notification<'a> {
     fn purge_expired(&mut self) {
         let now = time::Instant::now();
         self.notifications
-            .retain(|notif| notif.timestamp + notif.duration >= now)
+            .retain(|notif| notif.timestamp + notif.duration >= now);
     }
 
-    fn get_toast_area(&self, paragraph: &Paragraph, area: Rect, y_offset: u16) -> (Rect, u16) {
+    fn get_toast_area(paragraph: &Paragraph, area: Rect, y_offset: u16) -> (Rect, u16) {
         let inner_width =
             (area.width.saturating_sub(2)).min(paragraph.line_width().saturating_sub(2) as u16);
         let [_, inner_area_h] =
@@ -81,7 +85,7 @@ impl<'a> Notification<'a> {
 }
 
 #[async_trait::async_trait]
-impl<'a> Component for Notification<'a> {
+impl Component for Notification<'_> {
     async fn init(&mut self) -> Result<()> {
         Ok(())
     }
@@ -108,7 +112,7 @@ impl<'a> Component for Notification<'a> {
                         .title_top(Line::from(icon).centered()),
                 );
             let (toast_area, height) =
-                self.get_toast_area(&paragraph, notification_area, offset_height);
+                Notification::get_toast_area(&paragraph, notification_area, offset_height);
 
             frame.render_widget(Clear, toast_area);
             paragraph.render(toast_area, frame.buffer_mut());
