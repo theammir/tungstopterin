@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, time::Duration};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 
 use color_eyre::eyre::Result;
 use common::protocol;
@@ -11,9 +11,17 @@ use ratatui::{
     },
     prelude::*,
 };
+use rustls_native_certs::load_native_certs;
 use tokio::{
     net::TcpStream,
     sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError},
+};
+use tokio_rustls::{
+    TlsConnector,
+    rustls::{
+        self,
+        pki_types::{CertificateDer, ServerName, pem::PemObject},
+    },
 };
 use tokio_util::sync::CancellationToken;
 use websocket::{
@@ -22,6 +30,8 @@ use websocket::{
 };
 
 use crate::components::Urgency;
+
+type TlsStream = tokio_rustls::client::TlsStream<TcpStream>;
 
 fn into_ratatui_color(color: protocol::Color) -> ratatui::style::Color {
     match color {
@@ -132,7 +142,7 @@ struct App {
 }
 
 impl App {
-    fn new(ws_rx: WsRecvHalf<Server>, ws_tx: WsSendHalf<Server>) -> Self {
+    fn new(ws_rx: WsRecvHalf<Server, TlsStream>, ws_tx: WsSendHalf<Server, TlsStream>) -> Self {
         let app_cancel = CancellationToken::new();
         let (event_tx, event_rx) = tokio::sync::mpsc::unbounded_channel::<AppEvent>();
         let ws_tx = App::spawn_ws_sender(ws_tx);
@@ -149,7 +159,11 @@ impl App {
         app
     }
 
-    fn spawn_event_emitter(&self, mut ws_rx: WsRecvHalf<Server>, event_cancel: CancellationToken) {
+    fn spawn_event_emitter(
+        &self,
+        mut ws_rx: WsRecvHalf<Server, TlsStream>,
+        event_cancel: CancellationToken,
+    ) {
         let inner_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let event_tx = inner_tx;
@@ -173,7 +187,7 @@ impl App {
         });
     }
 
-    fn spawn_ws_sender(mut ws_tx: WsSendHalf<Server>) -> UnboundedSender<Message> {
+    fn spawn_ws_sender(mut ws_tx: WsSendHalf<Server, TlsStream>) -> UnboundedSender<Message> {
         let (shared_ws_tx, mut ws_rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
         tokio::spawn(async move {
             loop {
@@ -271,12 +285,34 @@ impl App {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // TODO: clap
     color_eyre::install()?;
 
-    let conn = TcpStream::connect("127.0.0.1:1337").await?;
+    let conn = TcpStream::connect("localhost:1337").await?;
     conn.set_nodelay(true)?;
-    let mut ws = WsStream::from_stream(conn);
-    ws.try_upgrade().await?;
+
+    let mut root_cert_store = rustls::RootCertStore::empty();
+    for cert in load_native_certs().expect("could not load platform native certs") {
+        root_cert_store.add(cert)?;
+    }
+    root_cert_store.add(
+        CertificateDer::pem_file_iter("certs/root-ca.pem")
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap(),
+    )?;
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_cert_store)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(config));
+
+    let domain = ServerName::try_from("localhost")?.to_owned();
+    let conn = connector.connect(domain, conn).await?;
+
+    let mut ws = WsStream::<Server, _>::from_stream(conn);
+    ws.try_upgrade("localhost:1337").await?;
     let (ws_rx, ws_tx) = ws.into_split();
 
     let mut terminal = ratatui::init();

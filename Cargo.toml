@@ -6,3 +6,9 @@ resolver = "2"
 version = "0.1.0"
 authors = ["theammir"]
 description = "Homegrown websocket chat app"
+
+[workspace.dependencies]
+tokio = { version = "~1.43", default-features = false }
+serde = { version = "1.0.219", features = ["serde_derive"] }
+rmp-serde = "1.3.0"
+tokio-rustls = { version = "0.26.2" }

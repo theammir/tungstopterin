@@ -14,10 +14,9 @@ Bundled with a homegrown WebSocket protocol implementaion.
 
 - [x] WebSocket protocol implementation
 - [ ] Verifiable RFC 6455 compliancy (via autobahn)
-- [ ] TLS encryption
+- [x] TLS encryption
 - [x] Concurrent client-server communication
 - [x] Extensible component-based client architecture
-- [ ] Some kind of integration testing
 
 # Application Features
 
@@ -29,4 +28,3 @@ Bundled with a homegrown WebSocket protocol implementaion.
 - [ ] Chat history saving
 - [ ] Markdown-like rich text formatting
 - [ ] Images support in modern terminals
-- [ ] Channels

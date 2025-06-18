@@ -4,16 +4,28 @@ use std::io::ErrorKind;
 use std::sync::Arc;
 
 use common::protocol;
-use tokio::{net::TcpListener, sync::Mutex};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    sync::Mutex,
+};
+use tokio_rustls::{
+    TlsAcceptor,
+    rustls::{
+        self,
+        pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject},
+    },
+};
 use websocket::{
     Client, WsRecv, WsRecvHalf, WsSend, WsSendHalf, WsStream,
     handshake::IntoWebsocket,
     message::{Message, MessageError},
 };
 
+type TlsStream = tokio_rustls::server::TlsStream<TcpStream>;
+
 #[derive(Debug)]
 struct ClientData {
-    tx: WsSendHalf<Client>,
+    tx: WsSendHalf<Client, TlsStream>,
     name: String,
     color: protocol::Color,
 }
@@ -154,12 +166,15 @@ async fn on_disconnect(address: SocketAddr, clients: Arc<Mutex<Clients>>) {
     }
 }
 
-async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> std::io::Result<()> {
+async fn on_connect(
+    socket: WsStream<Client, TlsStream>,
+    addr: SocketAddr,
+    clients: Arc<Mutex<Clients>>,
+) -> std::io::Result<()> {
     let (mut rx, mut tx) = socket.into_split();
-    let addr = rx.0.peer_addr()?;
 
     loop {
-        let result = handle_auth(&mut rx, tx, Arc::clone(&clients)).await;
+        let result = handle_auth(&mut rx, tx, addr, Arc::clone(&clients)).await;
         match result {
             Ok(None) => break,
             Ok(Some(_tx)) => tx = _tx,
@@ -191,12 +206,11 @@ async fn on_connect(socket: WsStream<Client>, clients: Arc<Mutex<Clients>>) -> s
 }
 
 async fn handle_auth(
-    rx: &mut WsRecvHalf<Client>,
-    tx: WsSendHalf<Client>,
+    rx: &mut WsRecvHalf<Client, TlsStream>,
+    tx: WsSendHalf<Client, TlsStream>,
+    addr: SocketAddr,
     clients: Arc<Mutex<Clients>>,
-) -> std::io::Result<Option<WsSendHalf<Client>>> {
-    let addr = tx.0.peer_addr()?;
-
+) -> std::io::Result<Option<WsSendHalf<Client, TlsStream>>> {
     let client_msg = match rx.receive().await {
         Ok(msg) => protocol::ClientMessage::try_from(&msg).ok(),
         Err(MessageError::ProtocolViolated(websocket::message::StatusCode::CloseAbnormal)) => {
@@ -285,14 +299,40 @@ async fn handle_client_message(
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:1337").await?;
+    // TODO: clap
+    let certs = CertificateDer::pem_file_iter("certs/cert.pem")
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    let key = PrivateKeyDer::from_pem_file("certs/cert.key.pem").unwrap();
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .unwrap();
+    let acceptor = TlsAcceptor::from(Arc::new(config));
+
+    let listener = TcpListener::bind("localhost:1337").await?;
     let clients = Arc::new(Mutex::new(Clients::new()));
 
     loop {
         if let Ok((socket, _)) = listener.accept().await {
-            let mut socket = WsStream::<Client>::from_stream(socket);
-            if socket.try_upgrade().await.is_ok() {
-                tokio::spawn(on_connect(socket, Arc::clone(&clients)));
+            // prevent main thread from panicking
+            let socket = acceptor.accept(socket).await;
+            if socket.is_err() {
+                continue;
+            }
+            let socket = socket.unwrap();
+
+            let addr = socket.get_ref().0.peer_addr();
+            if addr.is_err() {
+                continue;
+            }
+            let addr = addr.unwrap();
+
+            let mut socket = WsStream::<Client, _>::from_stream(socket);
+            if socket.try_upgrade("localhost:1337").await.is_ok() {
+                tokio::spawn(on_connect(socket, addr, Arc::clone(&clients)));
             }
         }
     }

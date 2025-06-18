@@ -7,6 +7,7 @@ use sha1::Sha1;
 
 use crate::Client;
 use crate::Server;
+use crate::UnpinStream;
 use crate::WsRecv;
 use crate::WsSend;
 use crate::WsStream;
@@ -25,10 +26,10 @@ fn generate_response_key(key: String) -> String {
     STANDARD.encode(result)
 }
 
-fn validate_upgrade_headers(request: &str) -> bool {
+fn validate_upgrade_headers<'a>(request: &'a str, host: &str) -> Option<&'a str> {
     let lines: Vec<_> = request.lines().collect();
 
-    lines
+    if !(lines
         .iter()
         .any(|l| l.eq_ignore_ascii_case("upgrade: websocket"))
         && lines
@@ -37,25 +38,27 @@ fn validate_upgrade_headers(request: &str) -> bool {
         && lines
             .iter()
             .any(|l| l.eq_ignore_ascii_case("sec-websocket-version: 13"))
-        && lines
-            .iter()
-            .any(|l| l.to_ascii_lowercase().starts_with("host:"))
-        && lines
-            .iter()
-            .any(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
+        && lines.iter().any(|l| {
+            l.to_ascii_lowercase().starts_with("host:")
+                && l.split_once(": ").is_some_and(|(_, h)| h.trim() == host)
+        }))
+    {
+        return None;
+    }
+
+    lines
+        .iter()
+        .find(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
+        .map(|l| l.split_once(": ").map(|(_, key)| key))?
 }
 
-// FIX: Now IntoWebsocket is implemented by a WsStream, which is supposed to be an already
-// established upgraded connection.
-// Proper semantics would be upgrading a TcpStream into a WsStream.
-// Tungstenite achieves this by leaving the method at module scope.
 #[allow(async_fn_in_trait)]
-pub trait IntoWebsocket: WsSend + WsRecv {
-    async fn try_upgrade(&mut self) -> std::io::Result<()>;
+pub trait IntoWebsocket {
+    async fn try_upgrade(&mut self, host: &str) -> std::io::Result<()>;
 }
 
-impl IntoWebsocket for WsStream<Server> {
-    async fn try_upgrade(&mut self) -> std::io::Result<()> {
+impl<T: UnpinStream> IntoWebsocket for WsStream<Server, T> {
+    async fn try_upgrade(&mut self, host: &str) -> std::io::Result<()> {
         let sec_key = generate_sec_key();
         self.send_raw(
             format!(
@@ -66,7 +69,6 @@ Upgrade: websocket\r
 Connection: upgrade\r
 Sec-Websocket-Key: {key}\r
 Sec-Websocket-Version: 13\r\n\r\n",
-                host = "idk",
                 key = sec_key
             )
             .as_bytes(),
@@ -91,20 +93,13 @@ Sec-Websocket-Version: 13\r\n\r\n",
     }
 }
 
-impl IntoWebsocket for WsStream<Client> {
-    async fn try_upgrade(&mut self) -> std::io::Result<()> {
+impl<T: UnpinStream> IntoWebsocket for WsStream<Client, T> {
+    async fn try_upgrade(&mut self, expected_host: &str) -> std::io::Result<()> {
         let request = String::from_utf8(self.read_http_bytes().await?.to_vec())
             .map_err(|_| ErrorKind::InvalidData)?;
 
-        validate_upgrade_headers(&request);
-
-        let sec_key = request
-            .lines()
-            .find(|l| l.to_ascii_lowercase().starts_with("sec-websocket-key:"))
-            .unwrap()
-            .split_once(": ")
-            .unwrap()
-            .1;
+        let sec_key = validate_upgrade_headers(&request, expected_host)
+            .ok_or(ErrorKind::ConnectionRefused)?;
 
         let response = format!(
             "\
