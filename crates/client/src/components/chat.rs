@@ -161,16 +161,16 @@ impl Chat<'_> {
     async fn handle_key_event(&mut self, event: KeyEvent) -> Result<bool> {
         Ok(match self.mode {
             Mode::Normal => match event.code {
-                event::KeyCode::Char('i' | 'a') => {
+                event::KeyCode::Char('i' | 'ш' | 'a' | 'ф') => {
                     self.mode = Mode::Insert;
                     true
                 }
-                event::KeyCode::Char('j') => {
+                event::KeyCode::Char('j' | 'о') => {
                     self.chat_scroll_neg =
                         Some(self.chat_scroll_neg.unwrap_or(0).saturating_sub(1));
                     true
                 }
-                event::KeyCode::Char('k') => {
+                event::KeyCode::Char('k' | 'л') => {
                     self.chat_scroll_neg =
                         Some(self.chat_scroll_neg.unwrap_or(0).saturating_add(1));
                     true

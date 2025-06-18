@@ -167,13 +167,13 @@ impl Auth {
             .is_some()
     }
 
-            event::KeyCode::Char('j' | 's') | event::KeyCode::Down => {
     fn handle_colors_event(&mut self, event: event::KeyEvent) -> bool {
         match event.code {
+            event::KeyCode::Char('j' | 'о' | 's' | 'і') | event::KeyCode::Down => {
                 self.color_list.state.select_next();
                 true
             }
-            event::KeyCode::Char('k' | 'w') | event::KeyCode::Up => {
+            event::KeyCode::Char('k' | 'л' | 'w' | 'ц') | event::KeyCode::Up => {
                 self.color_list.state.select_previous();
                 true
             }
@@ -237,7 +237,7 @@ impl Component for Auth {
                 return Ok(true);
             }
             Ok(match key_event.code {
-                event::KeyCode::Char('q') => {
+                event::KeyCode::Char('q' | 'й') => {
                     self.event_tx.send(AppEvent::ComponentUnfocus)?;
                     true
                 }

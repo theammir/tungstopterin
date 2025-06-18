@@ -278,7 +278,7 @@ impl App {
             {
                 #[allow(clippy::single_match)]
                 match key_event.code {
-                    event::KeyCode::Char('q') => {
+                    event::KeyCode::Char('q' | 'й') => {
                         self.should_quit = true;
                     }
                     _ => {}
