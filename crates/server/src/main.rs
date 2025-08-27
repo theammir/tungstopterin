@@ -268,7 +268,7 @@ async fn handle_client_message(
     clients: Arc<Mutex<Clients>>,
 ) -> std::io::Result<()> {
     match message {
-        protocol::ClientMessage::SendMessage { token, text } => {
+        protocol::ClientMessage::SendMessage { token, text, image } => {
             let maybe_sender: Option<protocol::MessageSender> = clients
                 .lock()
                 .await
@@ -279,7 +279,9 @@ async fn handle_client_message(
                     clients
                         .lock()
                         .await
-                        .broadcast(protocol::ServerMessage::PropagateMessage(sender, text).into())
+                        .broadcast(
+                            protocol::ServerMessage::PropagateMessage(sender, text, image).into(),
+                        )
                         .await?;
                 }
                 None => println!("Unknown sender with token `{token}`"),
@@ -313,18 +315,13 @@ async fn main() -> std::io::Result<()> {
 
     loop {
         if let Ok((socket, _)) = listener.accept().await {
-            // prevent main thread from panicking
-            let socket = acceptor.accept(socket).await;
-            if socket.is_err() {
+            let Ok(socket) = acceptor.accept(socket).await else {
                 continue;
-            }
-            let socket = socket.unwrap();
+            };
 
-            let addr = socket.get_ref().0.peer_addr();
-            if addr.is_err() {
+            let Ok(addr) = socket.get_ref().0.peer_addr() else {
                 continue;
-            }
-            let addr = addr.unwrap();
+            };
 
             let mut socket = WsStream::<Client, _>::from_stream(socket);
             if socket.try_upgrade("localhost:1337").await.is_ok() {

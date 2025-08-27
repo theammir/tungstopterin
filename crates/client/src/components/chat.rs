@@ -24,6 +24,13 @@ pub enum Mode {
     Insert,
 }
 
+/// This component is *not* on top of the stack, thus relying on [`AppEvent::SpawnAuth`]
+/// to be executed by the [App] when in focus - currently, this is the first component
+/// that is created, and is being focused by default, so we're fine.
+/// Otherwise, newly spawned [Auth] will remain unfocused. (see [`Chat::init`]).
+///
+/// [App]: crate::App
+/// [Auth]: crate::components::auth::Auth
 #[derive(Debug)]
 pub struct Chat<'a> {
     mode: Mode,
@@ -158,7 +165,7 @@ impl Chat<'_> {
         })
     }
 
-    async fn handle_key_event(&mut self, event: KeyEvent) -> Result<bool> {
+    fn handle_key_event(&mut self, event: KeyEvent) -> Result<bool> {
         Ok(match self.mode {
             Mode::Normal => match event.code {
                 event::KeyCode::Char('i' | 'ш' | 'a' | 'ф') => {
@@ -183,7 +190,7 @@ impl Chat<'_> {
                     true
                 }
                 event::KeyCode::Enter => {
-                    self.send_chat_message().await?;
+                    self.send_chat_message()?;
                     true
                 }
                 _ => self
@@ -216,7 +223,7 @@ impl Chat<'_> {
                 protocol::ServerMessage::AuthSuccess(Ok(token)) => {
                     self.token = Some(token);
                 }
-                protocol::ServerMessage::PropagateMessage(sender, text) => {
+                protocol::ServerMessage::PropagateMessage(sender, text, _image) => {
                     self.received_messages.push(
                         Span::styled(
                             sender.name,
@@ -255,7 +262,7 @@ impl Chat<'_> {
         Ok(true)
     }
 
-    async fn send_chat_message(&mut self) -> Result<()> {
+    fn send_chat_message(&mut self) -> Result<()> {
         if self.token.is_none() {
             return Ok(());
         }
@@ -264,6 +271,7 @@ impl Chat<'_> {
             protocol::ClientMessage::SendMessage {
                 token: self.token.clone().unwrap(),
                 text: self.current_input.to_string(),
+                image: None,
             }
             .into(),
         )?;
@@ -275,6 +283,7 @@ impl Chat<'_> {
 #[async_trait::async_trait]
 impl Component for Chat<'_> {
     async fn init(&mut self) -> Result<()> {
+        // See `Chat` doc
         self.event_tx.send(AppEvent::SpawnAuth)?;
         Ok(())
     }
@@ -305,7 +314,7 @@ impl Component for Chat<'_> {
 
     async fn handle_event(&mut self, event: AppEvent, is_focused: bool) -> Result<bool> {
         Ok(match event {
-            AppEvent::KeyEvent(key_event) if is_focused => self.handle_key_event(key_event).await?,
+            AppEvent::KeyEvent(key_event) if is_focused => self.handle_key_event(key_event)?,
             AppEvent::WsMessage(msg) => self.handle_ws_message(&msg)?,
             _ => false,
         })

@@ -10,10 +10,15 @@ pub const NICKNAME_MAX_LEN: usize = 16;
 pub enum ClientMessage {
     /// An auth request with a user's display name and its color.
     Auth(MessageSender),
-    /// Token provided by [`ServerMessage::AuthSuccess`] and message text.
+    /// Constructed from a token provided by [`ServerMessage::AuthSuccess`], message text,
+    /// and attached image bytes (the format is guessed by the client, and let's hope it supports it).
     /// Does not imply that the message will *actually* be sent.
     /// The client should only rely on [`ServerMessage::PropagateMessage`].
-    SendMessage { token: Token, text: String },
+    SendMessage {
+        token: Token,
+        text: String,
+        image: Option<Vec<u8>>,
+    },
 }
 
 #[non_exhaustive]
@@ -22,7 +27,8 @@ pub enum ServerMessage {
     /// Whether the server accepts [`ClientMessage::Auth`].
     AuthSuccess(Result<Token, AuthError>),
     /// A chat message from either this client or any other.
-    PropagateMessage(MessageSender, String),
+    /// See [`ClientMessage::SendMessage`] for field definition.
+    PropagateMessage(MessageSender, String, Option<Vec<u8>>),
     /// Any kind of notification issued by the server.
     Notification(ServerNotification),
 }

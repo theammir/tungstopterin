@@ -221,6 +221,7 @@ impl App {
     }
 
     async fn init_components(&mut self) -> Result<()> {
+        // Has to be first, or otherwise focused before init. See `Chat` doc.
         self.components.push_back(components::Chat::new(
             self.ws_tx.clone(),
             self.event_tx.clone(),
