@@ -28,3 +28,9 @@ Bundled with a homegrown WebSocket protocol implementaion.
 - [ ] Chat history saving
 - [ ] Markdown-like rich text formatting
 - [ ] Images support in modern terminals
+
+# Screenshots
+
+| Authentication | Chatting |
+|----------------|----------|
+| <img width="960" height="480" alt="image" src="https://github.com/user-attachments/assets/39981f39-945f-499e-8b62-b64134b0a6a2" /> |<img width="960" height="480" alt="image" src="https://github.com/user-attachments/assets/3d5ea926-508c-495f-9c19-165a666734a1" /> |
